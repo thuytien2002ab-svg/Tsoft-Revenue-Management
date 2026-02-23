@@ -4,6 +4,7 @@ import * as api from '../services/api';
 import AgentManagementModal from './AgentManagementModal';
 import DebtDetailModal from './DebtDetailModal';
 import RevenueChart from './RevenueChart';
+import ChangePasswordModal from './ChangePasswordModal';
 import { formatCurrency, exportToCSV } from '../utils';
 import { format, isAfter, isBefore, subMonths, isWithinInterval, parseISO, startOfDay, endOfDay, startOfWeek, endOfWeek, formatISO } from 'date-fns';
 import { vi } from 'date-fns/locale';
@@ -31,6 +32,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     const [isAddOrderModalOpen, setIsAddOrderModalOpen] = useState(false);
     const [isEditOrderModalOpen, setIsEditOrderModalOpen] = useState(false);
     const [orderToEdit, setOrderToEdit] = useState<Order | null>(null);
+    const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
 
 
     // Filter states for orders tab
@@ -670,7 +672,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                 <div className="flex items-center gap-4">
 
                     <p className="text-xl text-slate-400">Chào, {user.name}!</p>
-                    <button onClick={onLogout} className="px-6 py-3 text-lg font-semibold text-white transition-colors duration-200 bg-red-600 rounded-lg shadow-md hover:bg-red-700">Đăng xuất</button>
+                    <button onClick={() => setIsChangePasswordModalOpen(true)} className="px-4 py-2 text-sm font-semibold text-white transition-colors duration-200 bg-slate-600 rounded-lg shadow-md hover:bg-slate-500">Đổi mật khẩu</button>
+                    <button onClick={onLogout} className="px-6 py-2 text-sm font-semibold text-white transition-colors duration-200 bg-red-600 rounded-lg shadow-md hover:bg-red-700">Đăng xuất</button>
                 </div>
             </header>
 
@@ -751,6 +754,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                     agent={agents.find(a => a.id === selectedDebt.agentId) || null}
                     orders={orders.filter(o => o.agentId === selectedDebt.agentId && format(startOfDay(parseISO(o.sold_at)), 'yyyy-MM-dd') === selectedDebt.date)}
                     packages={packages}
+                />
+            )}
+            {isChangePasswordModalOpen && (
+                <ChangePasswordModal
+                    user={user}
+                    onClose={() => setIsChangePasswordModalOpen(false)}
+                    onSuccess={() => {
+                        setIsChangePasswordModalOpen(false);
+                        alert("Đổi mật khẩu thành công!");
+                    }}
                 />
             )}
         </div>

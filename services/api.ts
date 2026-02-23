@@ -22,9 +22,47 @@ export const login = async (username: string, password: string): Promise<{ succe
   return { success: false, message: 'Tài khoản đã bị vô hiệu hoá.' };
 };
 
+export const getPasswordForAdmin = async (): Promise<string | null> => {
+  const { data, error } = await supabase
+    .from('users')
+    .select('password')
+    .eq('username', 'admin')
+    .single();
+
+  if (error || !data) return null;
+  return data.password;
+};
+
+export const changePassword = async (userId: number, currentPassword: string, newPassword: string): Promise<{ success: boolean; message?: string }> => {
+  const { data: user, error: fetchError } = await supabase
+    .from('users')
+    .select('password')
+    .eq('id', userId)
+    .single();
+
+  if (fetchError || !user) {
+    return { success: false, message: 'Lỗi xác thực người dùng.' };
+  }
+
+  if (user.password !== currentPassword) {
+    return { success: false, message: 'Mật khẩu hiện tại không chính xác.' };
+  }
+
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({ password: newPassword })
+    .eq('id', userId);
+
+  if (updateError) {
+    return { success: false, message: 'Lỗi cập nhật mật khẩu. Vui lòng thử lại.' };
+  }
+
+  return { success: true };
+};
+
 export const getOrders = async (user: User): Promise<Order[]> => {
   let query = supabase.from('orders').select('*').order('sold_at', { ascending: true });
-  
+
   if (user.role !== Role.Admin) {
     query = query.eq('agentId', user.id);
   }
@@ -123,10 +161,10 @@ export const deleteAgent = async (agentId: number): Promise<{ success: boolean }
     .eq('id', agentId);
 
   if (error) throw error;
-  
+
   // Also delete orders associated with this agent for data consistency
   await supabase.from('orders').delete().eq('agentId', agentId);
-  
+
   return { success: true };
 };
 
@@ -161,7 +199,7 @@ export const getDailyDebts = async (user: User): Promise<DailyDebt[]> => {
     acc[key].push(order);
     return acc;
   }, {});
-  
+
   const dailyDebts: DailyDebt[] = Object.entries(groupedByAgentAndDay).map(([key, dailyOrders]) => {
     const [agentIdStr, date] = key.split('_');
     const agentId = parseInt(agentIdStr, 10);
@@ -170,7 +208,7 @@ export const getDailyDebts = async (user: User): Promise<DailyDebt[]> => {
 
     const totalGrossRevenue = dailyOrders.reduce((sum, o) => sum + o.price, 0);
     const totalNetRevenue = totalGrossRevenue * (1 - discount / 100);
-    
+
     return {
       id: key,
       agentId,
@@ -181,7 +219,7 @@ export const getDailyDebts = async (user: User): Promise<DailyDebt[]> => {
     };
   });
 
-  return dailyDebts.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return dailyDebts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 };
 
 export const updateDebtStatus = async (debtId: string, status: DebtStatus): Promise<{ success: boolean }> => {
@@ -288,7 +326,7 @@ export const loadStateFromBackup = async (data: AppDataBackup): Promise<{ succes
   if (!data.users || !data.orders || data.daily_debts === undefined || !data.admin_logs) {
     throw new Error("Invalid backup file format.");
   }
-  
+
   // Clear existing data (in a real scenario, you might want to be careful with this)
   await Promise.all([
     supabase.from('users').delete().neq('id', 0),
@@ -300,10 +338,10 @@ export const loadStateFromBackup = async (data: AppDataBackup): Promise<{ succes
   // Insert new data
   if (data.users.length > 0) await supabase.from('users').insert(data.users);
   if (data.orders.length > 0) await supabase.from('orders').insert(data.orders);
-  
+
   const debtEntries = Object.entries(data.daily_debts).map(([id, status]) => ({ id, status }));
   if (debtEntries.length > 0) await supabase.from('daily_debts').insert(debtEntries);
-  
+
   if (data.admin_logs.length > 0) await supabase.from('admin_logs').insert(data.admin_logs);
 
   return { success: true };
