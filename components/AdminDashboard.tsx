@@ -5,9 +5,10 @@ import AgentManagementModal from './AgentManagementModal';
 import DebtDetailModal from './DebtDetailModal';
 import RevenueChart from './RevenueChart';
 import ChangePasswordModal from './ChangePasswordModal';
-import { formatCurrency, exportToCSV } from '../utils';
+import { formatCurrency, exportToExcel } from '../utils';
 import { format, isAfter, isBefore, subMonths, isWithinInterval, parseISO, startOfDay, endOfDay, startOfWeek, endOfWeek, formatISO } from 'date-fns';
 import { vi } from 'date-fns/locale';
+import { TrendingUp, PiggyBank, ShoppingCart, Activity, Trophy, Award } from 'lucide-react';
 
 interface AdminDashboardProps {
     user: User;
@@ -22,7 +23,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     const [dailyDebts, setDailyDebts] = useState<DailyDebt[]>([]);
     const [adminLogs, setAdminLogs] = useState<AdminLog[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [activeTab, setActiveTab] = useState('orders'); // 'orders', 'agents', 'debt', 'logs'
+    const [activeTab, setActiveTab] = useState('orders'); // 'orders', 'agents', 'debt', 'profit', 'logs'
 
     // Modal states
     const [isAgentModalOpen, setIsAgentModalOpen] = useState(false);
@@ -33,6 +34,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     const [isEditOrderModalOpen, setIsEditOrderModalOpen] = useState(false);
     const [orderToEdit, setOrderToEdit] = useState<Order | null>(null);
     const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
+    const [isAdminUnpaidModalOpen, setIsAdminUnpaidModalOpen] = useState(false);
 
 
     // Filter states for orders tab
@@ -40,6 +42,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     const [startDateFilter, setStartDateFilter] = useState('');
     const [endDateFilter, setEndDateFilter] = useState('');
     const [orderEmailFilter, setOrderEmailFilter] = useState('');
+    const [orderApprovalFilter, setOrderApprovalFilter] = useState('all');
+    const [orderPaymentFilter, setOrderPaymentFilter] = useState('all');
+
+    // Filter states for profit tab
+    const [profitStartDate, setProfitStartDate] = useState('');
+    const [profitEndDate, setProfitEndDate] = useState('');
 
     // Filter states for debt tab
     const [debtAgentFilter, setDebtAgentFilter] = useState('all');
@@ -108,12 +116,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
             .filter(o => isWithinInterval(parseISO(o.sold_at), { start: startOfThisWeekDate, end: endOfThisWeekDate }))
             .reduce((sum, o) => sum + o.price, 0);
 
+        const startOfThisMonthDate = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
+        const endOfThisMonthDate = endOfDay(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+
+        const thisMonthRevenue = orders
+            .filter(o => isWithinInterval(parseISO(o.sold_at), { start: startOfThisMonthDate, end: endOfThisMonthDate }))
+            .reduce((sum, o) => sum + o.price, 0);
+
         return {
             totalGrossRevenue,
             totalNetRevenue,
             totalOrders,
             todayRevenue,
-            thisWeekRevenue
+            thisWeekRevenue,
+            thisMonthRevenue
         };
     }, [orders, agents]);
 
@@ -198,6 +214,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
         return orders.filter(order => {
             const agentMatch = orderAgentFilter === 'all' || order.agentId === parseInt(orderAgentFilter, 10);
             const emailMatch = !orderEmailFilter || order.account_email?.toLowerCase().includes(orderEmailFilter.toLowerCase());
+            const approvalMatch = orderApprovalFilter === 'all' || order.status === orderApprovalFilter;
+            const paymentMatch = orderPaymentFilter === 'all' || order.paymentStatus === orderPaymentFilter;
 
             const dateMatch = (() => {
                 if (!startDateFilter && !endDateFilter) return true;
@@ -211,9 +229,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                 return true;
             })();
 
-            return agentMatch && dateMatch && emailMatch;
-        });
-    }, [orders, orderAgentFilter, startDateFilter, endDateFilter, orderEmailFilter]);
+            return agentMatch && dateMatch && emailMatch && approvalMatch && paymentMatch;
+        }).sort((a, b) => new Date(b.sold_at).getTime() - new Date(a.sold_at).getTime());
+    }, [orders, orderAgentFilter, startDateFilter, endDateFilter, orderEmailFilter, orderApprovalFilter, orderPaymentFilter]);
 
     const filteredDebts = useMemo(() => {
         return dailyDebts.filter(debt => {
@@ -226,9 +244,104 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
         });
     }, [dailyDebts, debtAgentFilter, debtStatusFilter, debtStartDate, debtEndDate]);
 
+    const topAgents = useMemo(() => {
+        const validOrders = orders.filter(o => o.paymentStatus === PaymentStatus.Paid || o.actual_revenue != null);
+
+        const agentRevenueMap: Record<number, { agentId: number; totalNet: number }> = {};
+
+        // Initialize map with all agents to ensure we always have candidates
+        agents.forEach(agent => {
+            agentRevenueMap[agent.id] = { agentId: agent.id, totalNet: 0 };
+        });
+
+        validOrders.forEach(order => {
+            if (!agentRevenueMap[order.agentId]) {
+                agentRevenueMap[order.agentId] = { agentId: order.agentId, totalNet: 0 };
+            }
+
+            let actualRevenue = order.actual_revenue;
+            if (actualRevenue == null) {
+                const agent = agents.find(a => a.id === order.agentId);
+                const discount = agent?.discountPercentage || 0;
+                actualRevenue = order.price * (1 - discount / 100);
+            }
+            agentRevenueMap[order.agentId].totalNet += actualRevenue;
+        });
+
+        return Object.values(agentRevenueMap)
+            .sort((a, b) => b.totalNet - a.totalNet)
+            .slice(0, 3);
+    }, [orders, agents]);
+
+    const revenueRecords = useMemo(() => {
+        const validOrders = orders.filter(o => o.paymentStatus === PaymentStatus.Paid || o.actual_revenue != null);
+
+        const dailyRevenue: Record<string, number> = {};
+        const monthlyRevenue: Record<string, number> = {};
+
+        validOrders.forEach(order => {
+            let actualRevenue = order.actual_revenue;
+            if (actualRevenue == null) {
+                const agent = agents.find(a => a.id === order.agentId);
+                const discount = agent?.discountPercentage || 0;
+                actualRevenue = order.price * (1 - discount / 100);
+            }
+
+            const dayKey = format(parseISO(order.sold_at), 'yyyy-MM-dd');
+            const monthKey = format(parseISO(order.sold_at), 'MM/yyyy');
+
+            dailyRevenue[dayKey] = (dailyRevenue[dayKey] || 0) + actualRevenue;
+            monthlyRevenue[monthKey] = (monthlyRevenue[monthKey] || 0) + actualRevenue;
+        });
+
+        let bestDay = { date: '', revenue: 0 };
+        Object.entries(dailyRevenue).forEach(([date, revenue]) => {
+            if (revenue > bestDay.revenue) {
+                bestDay = { date, revenue };
+            }
+        });
+
+        let bestMonth = { month: '', revenue: 0 };
+        Object.entries(monthlyRevenue).forEach(([month, revenue]) => {
+            if (revenue > bestMonth.revenue) {
+                bestMonth = { month, revenue };
+            }
+        });
+
+        return { bestDay, bestMonth };
+    }, [orders, agents]);
+
+    const adminUnpaidStats = useMemo(() => {
+        const unpaidOrders = orders.filter(o => o.paymentStatus === PaymentStatus.Unpaid);
+
+        const groupedByAgent = unpaidOrders.reduce((acc, order) => {
+            if (!acc[order.agentId]) {
+                acc[order.agentId] = {
+                    agentId: order.agentId,
+                    count: 0,
+                    totalDebt: 0
+                };
+            }
+            acc[order.agentId].count += 1;
+
+            let actualRevenue = order.actual_revenue;
+            if (actualRevenue == null) {
+                const agent = agents.find(a => a.id === order.agentId);
+                const discount = agent?.discountPercentage || 0;
+                actualRevenue = order.price * (1 - discount / 100);
+            }
+            acc[order.agentId].totalDebt += actualRevenue;
+
+            return acc;
+        }, {} as Record<number, { agentId: number; count: number; totalDebt: number }>);
+
+        return Object.values(groupedByAgent).sort((a, b) => b.totalDebt - a.totalDebt);
+    }, [orders, agents]);
+
     // --- Helper functions ---
     const getAgentName = (agentId: number) => agents.find(a => a.id === agentId)?.name || 'N/A';
     const getPackageName = (packageId: number) => packages.find(p => p.id === packageId)?.name || 'N/A';
+    const getAgentDiscountPercentage = (agentId: number) => agents.find(a => a.id === agentId)?.discountPercentage || 0;
 
     // --- Event Handlers ---
     const handleOpenAgentModal = (agent: User | null) => {
@@ -264,6 +377,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
         setStartDateFilter('');
         setEndDateFilter('');
         setOrderEmailFilter('');
+        setOrderApprovalFilter('all');
+        setOrderPaymentFilter('all');
+    };
+
+    const handleClearProfitFilters = () => {
+        setProfitStartDate('');
+        setProfitEndDate('');
     };
 
     const handleAddOrder = async (newOrderData: Omit<Order, 'id'>) => {
@@ -348,40 +468,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     }
 
     const handleExportOrders = () => {
-        const dataToExport = filteredOrders.map((order, index) => {
-            const agent = agents.find(a => a.id === order.agentId);
-            const discount = agent?.discountPercentage || 0;
-            const calculatedNetRevenue = order.price * (1 - discount / 100);
-            const actualRevenue = order.actual_revenue ?? calculatedNetRevenue;
+        const dataToExport = filteredOrders.map(o => ({
+            'ID Khách': o.id,
+            'Đại lý phụ trách': getAgentName(o.agentId),
+            'Tên khách hàng': o.account_name,
+            'Email khách': o.account_email,
+            'Gói': getPackageName(o.packageId),
+            'Giá gói gốc (VND)': o.price,
+            'Thực Thu (VND)': o.actual_revenue != null ? o.actual_revenue : o.price * (1 - (getAgentDiscountPercentage(o.agentId) / 100)),
+            'Ngày hoàn thành': format(parseISO(o.sold_at), 'dd/MM/yyyy HH:mm'),
+            'Trạng thái': o.status === ActivationStatus.Activated ? 'Đã kích hoạt' : 'Chưa kích hoạt',
+            'Thanh toán': o.paymentStatus
+        }));
 
-            return {
-                stt: index + 1,
-                account: `${order.account_name}\n${order.account_email || ''}`,
-                package: getPackageName(order.packageId),
-                price: order.price,
-                netRevenue: actualRevenue,
-                notes: order.notes || '',
-                agent: getAgentName(order.agentId),
-                sold_at: format(parseISO(order.sold_at), 'dd/MM/yyyy'),
-                status: order.status === ActivationStatus.Activated ? 'Approved' : 'Not Approved',
-                paymentStatus: order.paymentStatus
-            };
-        });
-
-        const headers = {
-            stt: 'STT',
-            account: 'Tài khoản',
-            package: 'Gói',
-            price: 'Giá',
-            netRevenue: 'Số tiền thực thu',
-            notes: 'Ghi chú',
-            agent: 'Đại lý',
-            sold_at: 'Ngày bán',
-            status: 'Tình trạng approve',
-            paymentStatus: 'Thanh toán'
-        };
-
-        exportToCSV(dataToExport, headers, `tsoft_all_orders_${format(new Date(), 'yyyyMMdd_HHmmss')}`);
+        exportToExcel(dataToExport, `tsoft_all_orders_${format(new Date(), 'yyyy-MM-dd')}`);
     };
 
     const renderOrdersTab = () => {
@@ -417,27 +517,41 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                 </div>
 
                 {/* FILTERS */}
-                <div className="grid grid-cols-1 gap-4 p-4 mb-6 md:grid-cols-2 lg:grid-cols-5 bg-slate-700/50 rounded-lg">
+                <div className="grid grid-cols-1 gap-4 p-4 mb-6 md:grid-cols-3 lg:grid-cols-6 xl:grid-cols-7 bg-slate-700/50 rounded-lg">
                     <input
                         type="text"
-                        placeholder="Tìm theo email khách hàng..."
+                        placeholder="Tìm email khách..."
                         value={orderEmailFilter}
                         onChange={e => setOrderEmailFilter(e.target.value)}
-                        className="w-full px-4 py-2 text-lg bg-slate-700 text-white border border-slate-600 rounded-md focus:ring-primary-focus focus:border-primary-focus"
+                        className="w-full px-4 py-2 text-base bg-slate-700 text-white border border-slate-600 rounded-md focus:ring-primary-focus focus:border-primary-focus xl:col-span-2"
                     />
-                    <select value={orderAgentFilter} onChange={e => setOrderAgentFilter(e.target.value)} className="px-4 py-2 text-lg bg-slate-700 text-white border border-slate-600 rounded-md appearance-none focus:ring-primary-focus focus:border-primary-focus">
+                    <select value={orderAgentFilter} onChange={e => setOrderAgentFilter(e.target.value)} className="px-4 py-2 text-base bg-slate-700 text-white border border-slate-600 rounded-md appearance-none focus:ring-primary-focus focus:border-primary-focus">
                         <option value="all">Lọc theo đại lý</option>
                         {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                     </select>
-                    <div className="flex items-center gap-2">
-                        <label htmlFor="startDate" className="text-slate-400">Từ:</label>
-                        <input id="startDate" type="date" value={startDateFilter} onChange={e => setStartDateFilter(e.target.value)} className="w-full px-4 py-2 text-lg bg-slate-700 text-white border border-slate-600 rounded-md focus:ring-primary-focus focus:border-primary-focus" />
+                    <select value={orderApprovalFilter} onChange={e => setOrderApprovalFilter(e.target.value)} className="px-4 py-2 text-base bg-slate-700 text-white border border-slate-600 rounded-md appearance-none focus:ring-primary-focus focus:border-primary-focus">
+                        <option value="all">Tình trạng approve</option>
+                        <option value={ActivationStatus.NotActivated}>Chưa kích hoạt</option>
+                        <option value={ActivationStatus.Activated}>Đã kích hoạt</option>
+                    </select>
+                    <select value={orderPaymentFilter} onChange={e => setOrderPaymentFilter(e.target.value)} className="px-4 py-2 text-base bg-slate-700 text-white border border-slate-600 rounded-md appearance-none focus:ring-primary-focus focus:border-primary-focus">
+                        <option value="all">Tất cả thanh toán</option>
+                        <option value={PaymentStatus.Unpaid}>Chưa thanh toán</option>
+                        <option value={PaymentStatus.Paid}>Đã thanh toán</option>
+                    </select>
+
+                    <div className="flex gap-2 col-span-1 md:col-span-2 lg:col-span-2">
+                        <div className="flex items-center gap-2 flex-1">
+                            <label htmlFor="startDate" className="text-slate-400 whitespace-nowrap">Từ:</label>
+                            <input id="startDate" type="date" value={startDateFilter} onChange={e => setStartDateFilter(e.target.value)} className="w-full px-2 py-2 text-base bg-slate-700 text-white border border-slate-600 rounded-md focus:ring-primary-focus focus:border-primary-focus" />
+                        </div>
+                        <div className="flex items-center gap-2 flex-1">
+                            <label htmlFor="endDate" className="text-slate-400 whitespace-nowrap">Đến:</label>
+                            <input id="endDate" type="date" value={endDateFilter} onChange={e => setEndDateFilter(e.target.value)} className="w-full px-2 py-2 text-base bg-slate-700 text-white border border-slate-600 rounded-md focus:ring-primary-focus focus:border-primary-focus" />
+                        </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <label htmlFor="endDate" className="text-slate-400">Đến:</label>
-                        <input id="endDate" type="date" value={endDateFilter} onChange={e => setEndDateFilter(e.target.value)} className="w-full px-4 py-2 text-lg bg-slate-700 text-white border border-slate-600 rounded-md focus:ring-primary-focus focus:border-primary-focus" />
-                    </div>
-                    <button onClick={handleClearOrderFilters} className="px-4 py-2 text-lg font-semibold text-white bg-slate-600 rounded-md hover:bg-slate-500">Xoá bộ lọc</button>
+
+                    <button onClick={handleClearOrderFilters} className="px-4 py-2 text-base font-semibold text-white bg-slate-600 rounded-md hover:bg-slate-500 md:col-span-3 lg:col-span-1 xl:col-span-1">Xoá bộ lọc</button>
                 </div>
 
                 {/* FILTER SUMMARY */}
@@ -450,9 +564,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                         <p className="text-sm text-slate-400 uppercase tracking-wider">Tổng số tiền thực thu (Net)</p>
                         <p className="text-2xl font-bold text-green-400">{formatCurrency(filteredNetRevenue)}</p>
                     </div>
-                    <div>
-                        <p className="text-sm text-slate-400 uppercase tracking-wider">Công nợ</p>
-                        <p className="text-2xl font-bold text-red-400">{formatCurrency(filteredDebt)}</p>
+                    <div className="cursor-pointer group" onClick={() => setIsAdminUnpaidModalOpen(true)}>
+                        <p className="text-sm text-slate-400 uppercase tracking-wider group-hover:text-red-300 transition-colors">Công nợ <span className="underline ml-1 text-xs opacity-70">(Nhấn để xem)</span></p>
+                        <p className="text-2xl font-bold text-red-400 group-hover:scale-105 transition-transform origin-left">{formatCurrency(filteredDebt)}</p>
                     </div>
                 </div>
 
@@ -491,18 +605,20 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                                     <td className="p-3">
                                         <button
                                             onClick={() => handleToggleActivation(order)}
-                                            className={`px-2 py-1 text-sm font-semibold rounded-full cursor-pointer transition-colors ${order.status === ActivationStatus.Activated ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30' : 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30'}`}
+                                            className={`px - 2 py - 1 text - sm font - semibold rounded - full cursor - pointer transition - colors ${order.status === ActivationStatus.Activated ? 'bg-green-500/20 text-green-400 hover:bg-green-500/30' : 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30'} `}
                                         >
                                             {order.status === ActivationStatus.Activated ? 'Approved' : 'Not Approved'}
                                         </button>
                                     </td>
-                                    <td className="p-3"><span className={`px-2 py-1 text-sm font-semibold rounded-full ${order.paymentStatus === PaymentStatus.Paid ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'}`}>{order.paymentStatus}</span></td>
+                                    <td className="p-3"><span className={`px - 2 py - 1 text - sm font - semibold rounded - full ${order.paymentStatus === PaymentStatus.Paid ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'} `}>{order.paymentStatus}</span></td>
                                     <td className="p-3">
                                         <div className="flex gap-2">
                                             {order.status === ActivationStatus.NotActivated && (
                                                 <button onClick={() => handleToggleActivation(order)} className="px-4 py-1 font-bold text-white bg-green-600 rounded-md hover:bg-green-700">Approve</button>
                                             )}
-                                            <button onClick={() => handleOpenEditModal(order)} className="px-4 py-1 font-bold text-white bg-blue-600 rounded-md hover:bg-blue-700">Sửa</button>
+                                            {order.paymentStatus !== PaymentStatus.Paid && (
+                                                <button onClick={() => handleOpenEditModal(order)} className="px-4 py-1 font-bold text-white bg-blue-600 rounded-md hover:bg-blue-700">Sửa</button>
+                                            )}
                                         </div>
                                     </td>
                                 </tr>
@@ -547,7 +663,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                                     <td className="p-3 text-lg text-primary">{formatCurrency(totalGrossRevenue)}</td>
                                     <td className="p-3 text-lg font-semibold text-green-400">{formatCurrency(commissionPayable)}</td>
                                     <td className="p-3 text-lg">{agent.discountPercentage || 0}%</td>
-                                    <td className="p-3"><span className={`px-2 py-1 text-sm font-semibold rounded-full ${agent.isActive ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>{agent.isActive ? 'Hoạt động' : 'Đã khoá'}</span></td>
+                                    <td className="p-3"><span className={`px - 2 py - 1 text - sm font - semibold rounded - full ${agent.isActive ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'} `}>{agent.isActive ? 'Hoạt động' : 'Đã khoá'}</span></td>
                                     <td className="p-3"><button onClick={() => handleOpenAgentModal(agent)} className="px-4 py-1 font-bold text-white bg-blue-600 rounded-md hover:bg-blue-700">Sửa</button></td>
                                 </tr>
                             )
@@ -595,7 +711,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                             <td className="p-3 text-lg">{formatCurrency(debt.totalGrossRevenue)}</td>
                             <td className="p-3 text-lg font-semibold text-yellow-400">{formatCurrency(debt.totalNetRevenue)}</td>
                             <td className="p-3">
-                                <span className={`px-3 py-1 text-sm font-bold rounded-full ${debt.status === DebtStatus.Paid ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}`}>
+                                <span className={`px - 3 py - 1 text - sm font - bold rounded - full ${debt.status === DebtStatus.Paid ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'} `}>
                                     {debt.status}
                                 </span>
                             </td>
@@ -603,7 +719,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                                 <div className="flex items-center gap-2">
                                     <button
                                         onClick={() => handleDebtStatusChange(debt.id, debt.status === DebtStatus.Paid ? DebtStatus.Unpaid : DebtStatus.Paid)}
-                                        className={`px-4 py-1 font-bold text-white rounded-md ${debt.status === DebtStatus.Paid ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-green-600 hover:bg-green-700'}`}
+                                        className={`px - 4 py - 1 font - bold text - white rounded - md ${debt.status === DebtStatus.Paid ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-green-600 hover:bg-green-700'} `}
                                     >
                                         {debt.status === DebtStatus.Paid ? 'Hoàn tác' : 'Xác nhận TT'}
                                     </button>
@@ -649,18 +765,129 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     const inactiveTabClasses = "px-6 py-3 text-lg font-semibold text-slate-400 hover:text-white";
 
     const renderRevenueSummary = () => {
-        const { todayRevenue, thisWeekRevenue } = globalStats;
+        const { todayRevenue, thisWeekRevenue, thisMonthRevenue } = globalStats;
 
         return (
-            <div className="flex flex-col gap-2">
-                <div className="text-sm text-slate-400">
-                    <p>Hôm nay: <span className="text-2xl font-bold text-green-400">{formatCurrency(todayRevenue)}</span></p>
-                    <p className="mt-2">Tuần này: <span className="text-2xl font-bold text-blue-400">{formatCurrency(thisWeekRevenue)}</span></p>
+            <div className="flex flex-col gap-3 mt-4">
+                <div className="flex justify-between items-center bg-slate-800/50 p-3 rounded-lg border border-slate-700/50">
+                    <span className="text-sm font-medium text-slate-400">Hôm nay</span>
+                    <span className="text-xl font-bold text-green-400">{formatCurrency(todayRevenue)}</span>
+                </div>
+                <div className="flex justify-between items-center bg-slate-800/50 p-3 rounded-lg border border-slate-700/50">
+                    <span className="text-sm font-medium text-slate-400">Tuần này</span>
+                    <span className="text-xl font-bold text-blue-400">{formatCurrency(thisWeekRevenue)}</span>
+                </div>
+                <div className="flex justify-between items-center bg-slate-800/50 p-3 rounded-lg border border-slate-700/50 border-l-2 border-l-yellow-500">
+                    <span className="text-sm font-bold text-yellow-500">Tháng này</span>
+                    <span className="text-xl font-bold text-yellow-400">{formatCurrency(thisMonthRevenue)}</span>
                 </div>
             </div>
         )
     };
 
+
+    const renderProfitTab = () => {
+        // Bao gồm tất cả các đơn hàng chưa bị huỷ để tính vào netRevenue. Tạm thời duyệt qua toàn bộ orders.
+        const dailyProfitMap: Record<string, { date: string, netRevenue: number, debtAmount: number, orderCount: number }> = {};
+
+        const filteredProfitOrders = orders.filter(order => {
+            if (!profitStartDate && !profitEndDate) return true;
+            const orderDate = startOfDay(parseISO(order.sold_at));
+            if (profitStartDate && isBefore(orderDate, startOfDay(parseISO(profitStartDate)))) return false;
+            if (profitEndDate && isAfter(orderDate, startOfDay(parseISO(profitEndDate)))) return false;
+            return true;
+        });
+
+        filteredProfitOrders.forEach(order => {
+            let actualRevenue = order.actual_revenue;
+            if (actualRevenue == null) {
+                const agent = agents.find(a => a.id === order.agentId);
+                const discount = agent?.discountPercentage || 0;
+                actualRevenue = order.price * (1 - discount / 100);
+            }
+
+            const dayKey = format(parseISO(order.sold_at), 'yyyy-MM-dd');
+            if (!dailyProfitMap[dayKey]) {
+                dailyProfitMap[dayKey] = { date: dayKey, netRevenue: 0, debtAmount: 0, orderCount: 0 };
+            }
+            dailyProfitMap[dayKey].netRevenue += actualRevenue;
+            if (order.paymentStatus === PaymentStatus.Unpaid) {
+                dailyProfitMap[dayKey].debtAmount += actualRevenue;
+            }
+            dailyProfitMap[dayKey].orderCount += 1;
+        });
+
+        const dailyProfits = Object.values(dailyProfitMap).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        const totalProfitOverall = dailyProfits.reduce((sum, day) => sum + day.netRevenue, 0);
+
+        return (
+            <div className="bg-slate-800 p-6 rounded-lg shadow-lg">
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-2xl font-bold text-white">Thống kê lợi nhuận</h2>
+                    <div className="bg-green-900/50 border border-green-500/30 px-6 py-2 rounded-lg">
+                        <span className="text-sm font-semibold text-green-300 mr-2 uppercase">Tổng luỹ kế:</span>
+                        <span className="text-xl font-bold text-green-400">{formatCurrency(totalProfitOverall)}</span>
+                    </div>
+                </div>
+
+                {/* FILTERS for Profit Tab */}
+                <div className="flex flex-wrap items-center gap-4 mb-6 p-4 bg-slate-700/50 rounded-lg">
+                    <div className="flex items-center gap-2">
+                        <label htmlFor="profitStartDate" className="text-slate-400">Từ:</label>
+                        <input id="profitStartDate" type="date" value={profitStartDate} onChange={e => setProfitStartDate(e.target.value)} className="px-4 py-2 text-base bg-slate-700 text-white border border-slate-600 rounded-md focus:ring-primary-focus focus:border-primary-focus" />
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <label htmlFor="profitEndDate" className="text-slate-400">Đến:</label>
+                        <input id="profitEndDate" type="date" value={profitEndDate} onChange={e => setProfitEndDate(e.target.value)} className="px-4 py-2 text-base bg-slate-700 text-white border border-slate-600 rounded-md focus:ring-primary-focus focus:border-primary-focus" />
+                    </div>
+                    <button onClick={handleClearProfitFilters} className="px-4 py-2 text-base font-semibold text-white bg-slate-600 rounded-md hover:bg-slate-500">Xoá lọc</button>
+                    {(profitStartDate || profitEndDate) && (
+                        <span className="text-sm text-yellow-400 ml-auto bg-yellow-400/10 px-3 py-1 rounded-full border border-yellow-400/20">
+                            Đang xem dữ liệu được giới hạn từ {profitStartDate ? format(parseISO(profitStartDate), 'dd/MM/yyyy') : '...'} đến {profitEndDate ? format(parseISO(profitEndDate), 'dd/MM/yyyy') : '...'}
+                        </span>
+                    )}
+                </div>
+
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left table-auto">
+                        <thead>
+                            <tr className="border-b border-slate-700">
+                                <th className="p-3 text-lg font-semibold tracking-wide text-slate-300 w-16">STT</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide text-slate-300">Ngày</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide text-slate-300">Số lượng đơn</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide text-slate-300">Công nợ (nếu có)</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide text-slate-300 text-right">Lợi nhuận (Net)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {dailyProfits.map((dayData, index) => (
+                                <tr key={dayData.date} className="border-b border-slate-700/50 hover:bg-slate-700/30 transition-colors">
+                                    <td className="p-3 text-slate-400">{index + 1}</td>
+                                    <td className="p-3 font-medium text-slate-200">{format(parseISO(dayData.date), 'dd/MM/yyyy')}</td>
+                                    <td className="p-3 text-slate-300">{dayData.orderCount} đơn</td>
+                                    <td className="p-3">
+                                        {dayData.debtAmount > 0 ? (
+                                            <span className="text-red-400 font-medium">
+                                                {formatCurrency(dayData.debtAmount)}
+                                            </span>
+                                        ) : (
+                                            <span className="text-slate-500">-</span>
+                                        )}
+                                    </td>
+                                    <td className="p-3 font-bold text-green-400 text-right">{formatCurrency(dayData.netRevenue)}</td>
+                                </tr>
+                            ))}
+                            {dailyProfits.length === 0 && (
+                                <tr>
+                                    <td colSpan={5} className="p-6 text-center text-slate-400">Không có dữ liệu lợi nhuận nào.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        );
+    };
 
     return (
         <div className="container p-4 mx-auto md:p-8">
@@ -678,23 +905,86 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
             </header>
 
             {/* Global Stats */}
-            <div className="p-6 mb-8 rounded-lg bg-slate-800 shadow-lg">
-                <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="p-6 rounded-lg bg-slate-700">
-                        <h4 className="text-lg text-slate-400">Tổng Doanh thu (Gross)</h4>
-                        <p className="text-5xl font-bold text-primary">{formatCurrency(globalStats.totalGrossRevenue)}</p>
+            <div className="grid grid-cols-1 gap-6 mb-8 md:grid-cols-2 xl:grid-cols-4">
+                {/* Card 1: Tổng quan (Gross, Net, Orders) */}
+                <div className="p-6 flex flex-col justify-between rounded-xl bg-gradient-to-br from-indigo-900/60 to-slate-800/90 border border-indigo-500/30 shadow-[0_4px_20px_rgba(99,102,241,0.15)]">
+                    <div className="flex items-center justify-between pb-4 border-b border-indigo-500/30">
+                        <div>
+                            <h4 className="text-xs font-medium text-indigo-200 uppercase tracking-wider mb-1">Tổng Doanh thu (Gross)</h4>
+                            <p className="text-3xl font-extrabold text-white">{formatCurrency(globalStats.totalGrossRevenue)}</p>
+                        </div>
+                        <div className="p-2 bg-indigo-500/20 rounded-lg text-indigo-400"><TrendingUp size={24} /></div>
                     </div>
-                    <div className="p-6 rounded-lg bg-slate-700">
-                        <h4 className="text-lg text-slate-400">Lợi nhuận thu về (Net)</h4>
-                        <p className="text-5xl font-bold text-green-400">{formatCurrency(globalStats.totalNetRevenue)}</p>
+                    <div className="flex items-center justify-between py-4 border-b border-indigo-500/30">
+                        <div>
+                            <h4 className="text-xs font-medium text-green-200 uppercase tracking-wider mb-1">Lợi nhuận (Net)</h4>
+                            <p className="text-3xl font-extrabold text-green-400">{formatCurrency(globalStats.totalNetRevenue)}</p>
+                        </div>
+                        <div className="p-2 bg-green-500/20 rounded-lg text-green-400"><PiggyBank size={24} /></div>
                     </div>
-                    <div className="p-6 rounded-lg bg-slate-700">
-                        <h4 className="text-lg text-slate-400">Tổng số đơn hàng</h4>
-                        <p className="text-5xl font-bold text-blue-400">{globalStats.totalOrders}</p>
+                    <div className="flex items-center justify-between pt-4">
+                        <div>
+                            <h4 className="text-xs font-medium text-blue-200 uppercase tracking-wider mb-1">Tổng số đơn hàng</h4>
+                            <p className="text-3xl font-extrabold text-blue-400">{globalStats.totalOrders}</p>
+                        </div>
+                        <div className="p-2 bg-blue-500/20 rounded-lg text-blue-400"><ShoppingCart size={24} /></div>
                     </div>
-                    <div className="p-6 rounded-lg bg-slate-700">
-                        <h4 className="text-lg text-slate-400">Doanh thu gần đây</h4>
+                </div>
+
+                {/* Card 2: Doanh thu gần đây */}
+                <div className="p-6 rounded-xl bg-slate-800 shadow-lg border border-slate-700/80 flex flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                        <h4 className="text-sm font-medium text-slate-300 uppercase tracking-wider">Doanh thu gần đây</h4>
+                        <div className="p-2 bg-slate-700 rounded-lg text-slate-400"><Activity size={24} /></div>
+                    </div>
+                    <div className="flex-1 flex flex-col justify-center">
                         {renderRevenueSummary()}
+                    </div>
+                </div>
+
+                {/* Card 3: Kỷ lục Doanh thu */}
+                <div className="p-6 flex flex-col justify-between rounded-xl bg-gradient-to-br from-rose-900/50 to-slate-800/90 border border-rose-500/30 shadow-[0_4px_20px_rgba(244,63,94,0.15)] flex flex-col justify-between">
+                    <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-sm font-medium text-rose-200 uppercase tracking-wider">Kỷ lục Doanh thu</h4>
+                        <div className="p-2 bg-rose-500/20 rounded-lg text-rose-400"><Award size={24} /></div>
+                    </div>
+                    <div className="flex-1 flex flex-col gap-4 justify-center">
+                        <div className="bg-slate-800/60 p-4 rounded-lg border border-slate-700/50 hover:bg-slate-700/50 transition-colors">
+                            <p className="text-xs text-rose-300 uppercase font-semibold mb-1">Tháng đỉnh cao</p>
+                            <div className="flex justify-between items-end">
+                                <p className="text-lg font-bold text-white max-w-[120px] truncate">{revenueRecords.bestMonth.month || 'N/A'}</p>
+                                <p className="text-xl font-bold text-rose-400">{formatCurrency(revenueRecords.bestMonth.revenue)}</p>
+                            </div>
+                        </div>
+                        <div className="bg-slate-800/60 p-4 rounded-lg border border-slate-700/50 hover:bg-slate-700/50 transition-colors">
+                            <p className="text-xs text-rose-300 uppercase font-semibold mb-1">Ngày bùng nổ</p>
+                            <div className="flex justify-between items-end">
+                                <p className="text-lg font-bold text-white max-w-[120px] truncate">{revenueRecords.bestDay.date ? format(parseISO(revenueRecords.bestDay.date), 'dd/MM/yyyy') : 'N/A'}</p>
+                                <p className="text-xl font-bold text-rose-400">{formatCurrency(revenueRecords.bestDay.revenue)}</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Card 4: Top 3 Đại lý */}
+                <div className="p-6 rounded-xl bg-gradient-to-br from-amber-900/40 to-slate-800/90 shadow-lg border border-amber-500/30 flex flex-col justify-between">
+                    <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-sm font-medium text-amber-200 uppercase tracking-wider">Xếp hạng Đại lý (Top 3)</h4>
+                        <div className="p-2 bg-amber-500/20 rounded-lg text-amber-400"><Trophy size={24} /></div>
+                    </div>
+                    <div className="flex flex-col gap-3 flex-1 justify-center">
+                        {topAgents.map((stat, index) => (
+                            <div key={stat.agentId} className="flex items-center justify-between bg-slate-800/60 p-3 rounded-lg border border-slate-700/50 hover:bg-slate-700/50 transition-colors">
+                                <div className="flex items-center gap-3">
+                                    <div className={`flex items-center justify-center w-8 h-8 rounded-full font-bold shadow-sm ${index === 0 ? 'bg-yellow-400 text-slate-900 shadow-[0_0_10px_rgba(250,204,21,0.5)]' : index === 1 ? 'bg-slate-300 text-slate-800' : 'bg-amber-600 text-white'}`}>
+                                        {index + 1}
+                                    </div>
+                                    <span className="font-semibold text-slate-200 truncate max-w-[120px]" title={getAgentName(stat.agentId)}>{getAgentName(stat.agentId)}</span>
+                                </div>
+                                <span className="font-bold text-amber-400">{formatCurrency(stat.totalNet)}</span>
+                            </div>
+                        ))}
+                        {topAgents.length === 0 && <p className="text-slate-400 text-center text-sm py-4">Chưa có dữ liệu đại lý.</p>}
                     </div>
                 </div>
             </div>
@@ -719,10 +1009,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                 <RevenueChart data={chartData} title="" />
             </div>
 
-            <div className="flex mb-0 border-b-2 border-slate-700">
+            <div className="flex mb-0 overflow-x-auto border-b-2 border-slate-700 whitespace-nowrap">
                 <button onClick={() => setActiveTab('orders')} className={activeTab === 'orders' ? activeTabClasses : inactiveTabClasses}>Đơn hàng</button>
                 <button onClick={() => setActiveTab('agents')} className={activeTab === 'agents' ? activeTabClasses : inactiveTabClasses}>Đại lý</button>
                 <button onClick={() => setActiveTab('debt')} className={activeTab === 'debt' ? activeTabClasses : inactiveTabClasses}>Đối soát</button>
+                <button onClick={() => setActiveTab('profit')} className={activeTab === 'profit' ? activeTabClasses : inactiveTabClasses}>Lợi nhuận</button>
                 <button onClick={() => setActiveTab('logs')} className={activeTab === 'logs' ? activeTabClasses : inactiveTabClasses}>Nhật ký Admin</button>
             </div>
 
@@ -730,6 +1021,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                 {activeTab === 'orders' && renderOrdersTab()}
                 {activeTab === 'agents' && renderAgentsTab()}
                 {activeTab === 'debt' && renderDebtTab()}
+                {activeTab === 'profit' && renderProfitTab()}
                 {activeTab === 'logs' && renderLogsTab()}
             </div>
 
@@ -765,6 +1057,53 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                         alert("Đổi mật khẩu thành công!");
                     }}
                 />
+            )}
+            {isAdminUnpaidModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
+                    <div className="w-full max-w-3xl max-h-[90vh] overflow-hidden bg-slate-800 rounded-2xl shadow-2xl border border-slate-700 flex flex-col">
+                        <div className="flex items-center justify-between p-6 border-b border-slate-700 bg-slate-800/50">
+                            <h3 className="text-2xl font-bold text-red-200 flex items-center gap-2">
+                                Tổng hợp Công nợ theo Đại lý
+                            </h3>
+                            <button onClick={() => setIsAdminUnpaidModalOpen(false)} className="p-2 text-slate-400 transition-colors hover:text-white hover:bg-slate-700 rounded-lg">
+                                X
+                            </button>
+                        </div>
+                        <div className="p-6 overflow-y-auto">
+                            {adminUnpaidStats.length === 0 ? (
+                                <p className="text-center text-slate-400 text-lg py-8">Tất cả đại lý đều đã thanh toán đủ.</p>
+                            ) : (
+                                <div className="overflow-x-auto rounded-lg border border-slate-700">
+                                    <table className="w-full text-left table-auto">
+                                        <thead className="bg-slate-700/50">
+                                            <tr>
+                                                <th className="p-4 font-semibold text-slate-200">Tên Đại lý</th>
+                                                <th className="p-4 font-semibold text-slate-200 text-center">Số đơn nợ</th>
+                                                <th className="p-4 font-semibold text-red-300 text-right">Tổng tiền phải nộp CTY</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-700">
+                                            {adminUnpaidStats.map(stat => (
+                                                <tr key={stat.agentId} className="hover:bg-slate-700/30 transition-colors">
+                                                    <td className="p-4 text-white font-medium">{getAgentName(stat.agentId)}</td>
+                                                    <td className="p-4 text-slate-300 text-center">{stat.count}</td>
+                                                    <td className="p-4 font-bold text-red-400 text-right">{formatCurrency(stat.totalDebt)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                        <tfoot className="bg-slate-900/50 font-bold border-t border-slate-700">
+                                            <tr>
+                                                <td className="p-4 text-slate-200">Tổng cộng</td>
+                                                <td className="p-4 text-slate-200 text-center">{adminUnpaidStats.reduce((sum, s) => sum + s.count, 0)}</td>
+                                                <td className="p-4 text-red-500 text-right text-xl">{formatCurrency(adminUnpaidStats.reduce((sum, s) => sum + s.totalDebt, 0))}</td>
+                                            </tr>
+                                        </tfoot>
+                                    </table>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );
