@@ -261,31 +261,25 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     }, [dailyDebts, debtAgentFilter, debtStatusFilter, debtStartDate, debtEndDate]);
 
     const topAgents = useMemo(() => {
-        const validOrders = orders.filter(o => o.paymentStatus === PaymentStatus.Paid || o.actual_revenue != null);
+        // Xếp hạng theo Gross (doanh số bán cho khách), không tính đơn hoàn
+        const agentGrossMap: Record<number, { agentId: number; totalGross: number }> = {};
 
-        const agentRevenueMap: Record<number, { agentId: number; totalNet: number }> = {};
-
-        // Initialize map with all agents to ensure we always have candidates
+        // Khởi tạo tất cả agents với giá trị 0
         agents.forEach(agent => {
-            agentRevenueMap[agent.id] = { agentId: agent.id, totalNet: 0 };
+            agentGrossMap[agent.id] = { agentId: agent.id, totalGross: 0 };
         });
 
-        validOrders.forEach(order => {
-            if (!agentRevenueMap[order.agentId]) {
-                agentRevenueMap[order.agentId] = { agentId: order.agentId, totalNet: 0 };
-            }
+        orders
+            .filter(o => o.paymentStatus !== PaymentStatus.Refunded)
+            .forEach(order => {
+                if (!agentGrossMap[order.agentId]) {
+                    agentGrossMap[order.agentId] = { agentId: order.agentId, totalGross: 0 };
+                }
+                agentGrossMap[order.agentId].totalGross += order.price;
+            });
 
-            let actualRevenue = order.actual_revenue;
-            if (actualRevenue == null) {
-                const agent = agents.find(a => a.id === order.agentId);
-                const discount = agent?.discountPercentage || 0;
-                actualRevenue = order.price * (1 - discount / 100);
-            }
-            agentRevenueMap[order.agentId].totalNet += actualRevenue;
-        });
-
-        return Object.values(agentRevenueMap)
-            .sort((a, b) => b.totalNet - a.totalNet)
+        return Object.values(agentGrossMap)
+            .sort((a, b) => b.totalGross - a.totalGross)
             .slice(0, 3);
     }, [orders, agents]);
 
@@ -1157,7 +1151,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                                     </div>
                                     <span className="font-semibold text-slate-200 truncate max-w-[120px]" title={getAgentName(stat.agentId)}>{getAgentName(stat.agentId)}</span>
                                 </div>
-                                <span className="font-bold text-amber-400">{formatCurrency(stat.totalNet)}</span>
+                                <span className="font-bold text-amber-400">{formatCurrency(stat.totalGross)}</span>
                             </div>
                         ))}
                         {topAgents.length === 0 && <p className="text-slate-400 text-center text-sm py-4">Chưa có dữ liệu đại lý.</p>}

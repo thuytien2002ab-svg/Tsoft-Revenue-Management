@@ -231,8 +231,14 @@ export const getDailyDebts = async (user: User): Promise<DailyDebt[]> => {
     const agent = agents.find(a => a.id === agentId);
     const discount = agent?.discountPercentage || 0;
 
-    const totalGrossRevenue = dailyOrders.reduce((sum, o) => sum + o.price, 0);
-    const totalNetRevenue = totalGrossRevenue * (1 - discount / 100);
+    // Loại bỏ đơn hoàn tiền khỏi tính toán doanh thu và lợi nhuận
+    const validOrders = dailyOrders.filter(o => o.paymentStatus !== PaymentStatus.Refunded);
+
+    const totalGrossRevenue = validOrders.reduce((sum, o) => sum + o.price, 0);
+    const totalNetRevenue = validOrders.reduce((sum, o) => {
+      const net = o.actual_revenue != null ? o.actual_revenue : o.price * (1 - discount / 100);
+      return sum + net;
+    }, 0);
 
     return {
       id: key,
