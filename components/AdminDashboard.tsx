@@ -473,7 +473,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     }
 
     const handleExportOrders = () => {
-        const dataToExport = filteredOrders.map(o => ({
+        // Xuất TOÀN BỘ đơn hàng của cty, không phụ thuộc bộ lọc hiện tại
+        const dataToExport = orders.map(o => ({
             'ID Khách': o.id,
             'Đại lý phụ trách': getAgentName(o.agentId),
             'Tên khách hàng': o.account_name,
