@@ -12,11 +12,12 @@ export enum ActivationStatus {
 export enum PaymentStatus {
   Paid = 'ĐÃ THANH TOÁN',
   Unpaid = 'CHƯA THANH TOÁN',
+  Refunded = 'ĐÃ HOÀN TIỀN',
 }
 
 export enum DebtStatus {
-    Paid = 'Đã thanh toán',
-    Unpaid = 'Chưa thanh toán',
+  Paid = 'Đã thanh toán',
+  Unpaid = 'Chưa thanh toán',
 }
 
 export interface User {
@@ -50,12 +51,12 @@ export interface Order {
 }
 
 export interface DailyDebt {
-    id: string; // "agentId_date"
-    agentId: number;
-    date: string; // "yyyy-MM-dd"
-    totalGrossRevenue: number;
-    totalNetRevenue: number;
-    status: DebtStatus;
+  id: string; // "agentId_date"
+  agentId: number;
+  date: string; // "yyyy-MM-dd"
+  totalGrossRevenue: number;
+  totalNetRevenue: number;
+  status: DebtStatus;
 }
 
 export interface AdminLog {

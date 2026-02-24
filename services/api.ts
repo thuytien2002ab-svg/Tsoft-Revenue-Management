@@ -122,6 +122,31 @@ export const deleteOrder = async (orderId: number): Promise<{ success: boolean }
   return { success: true };
 };
 
+export const deleteAllOrders = async (): Promise<{ success: boolean; deletedCount: number }> => {
+  // First count orders
+  const { count } = await supabase
+    .from('orders')
+    .select('*', { count: 'exact', head: true });
+
+  // Delete all orders
+  const { error: ordersError } = await supabase
+    .from('orders')
+    .delete()
+    .neq('id', 0);
+
+  if (ordersError) throw ordersError;
+
+  // Also clear all daily_debts records since they relate to orders
+  const { error: debtsError } = await supabase
+    .from('daily_debts')
+    .delete()
+    .neq('id', '');
+
+  if (debtsError) throw debtsError;
+
+  return { success: true, deletedCount: count || 0 };
+};
+
 // --- Agent Management APIs ---
 
 export const createAgent = async (agentData: Omit<User, 'id' | 'role'>): Promise<User> => {
@@ -266,7 +291,19 @@ export const updateDebtStatus = async (debtId: string, status: DebtStatus): Prom
 
 // --- Admin Logging APIs ---
 
+export const pruneOldLogs = async (): Promise<void> => {
+  const sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  await supabase
+    .from('admin_logs')
+    .delete()
+    .lt('timestamp', formatISO(sevenDaysAgo));
+};
+
 export const getAdminLogs = async (): Promise<AdminLog[]> => {
+  // Auto-cleanup: silently remove logs older than 7 days
+  await pruneOldLogs();
+
   const { data, error } = await supabase
     .from('admin_logs')
     .select('*')

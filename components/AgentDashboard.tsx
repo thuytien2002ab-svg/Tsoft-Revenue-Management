@@ -11,6 +11,23 @@ interface AgentDashboardProps {
   onLogout: () => void;
 }
 
+const calculateNetRevenue = (order: Order, agentDiscountPct: number): number => {
+  if (order.paymentStatus === PaymentStatus.Refunded) return 0;
+  if (order.actual_revenue != null) return order.actual_revenue;
+  const baseNet = order.price * (1 - agentDiscountPct / 100);
+  const match = order.notes?.match(/\[Giảm thêm: ([\d.,]*\d)đ\]/);
+  let extraDiscount = 0;
+  if (match) {
+    extraDiscount = Number(match[1].replace(/\./g, '').replace(/,/g, ''));
+  }
+  return Math.max(0, baseNet - extraDiscount);
+};
+
+const calculateGrossRevenue = (order: Order): number => {
+  if (order.paymentStatus === PaymentStatus.Refunded) return 0;
+  return order.price;
+};
+
 const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [packages, setPackages] = useState<Package[]>([]);
@@ -75,13 +92,12 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
   const agentCommission = user.discountPercentage || 0;
 
   const filteredStats = useMemo(() => {
-    const grossRevenue = filteredOrders.reduce((sum, order) => sum + order.price, 0);
+    const grossRevenue = filteredOrders.reduce((sum, order) => sum + calculateGrossRevenue(order), 0);
     const netRevenueCompany = filteredOrders.reduce((sum, order) => {
-      return sum + (order.actual_revenue != null ? order.actual_revenue : order.price * (1 - agentCommission / 100));
+      return sum + calculateNetRevenue(order, agentCommission);
     }, 0);
     const agentReceived = filteredOrders
-      .filter(o => o.paymentStatus === PaymentStatus.Paid)
-      .reduce((sum, order) => sum + (order.price * (agentCommission / 100)), 0);
+      .reduce((sum, order) => sum + (calculateGrossRevenue(order) * (agentCommission / 100)), 0);
 
     return { grossRevenue, netRevenueCompany, agentReceived };
   }, [filteredOrders, agentCommission]);
@@ -89,21 +105,19 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
   const stats = useMemo(() => {
     const monthlyOrders = orders.filter(o => isThisMonth(parseISO(o.sold_at)));
 
-    const monthlyRevenue = monthlyOrders.reduce((sum, order) => sum + order.price, 0);
+    const monthlyRevenue = monthlyOrders.reduce((sum, order) => sum + calculateGrossRevenue(order), 0);
 
     const monthlyCommissionReceived = monthlyOrders
-      .filter(o => o.paymentStatus === PaymentStatus.Paid)
-      .reduce((sum, order) => sum + order.price, 0) * (agentCommission / 100);
+      .reduce((sum, order) => sum + calculateGrossRevenue(order), 0) * (agentCommission / 100);
 
     const todayOrders = orders.filter(o => isToday(parseISO(o.sold_at)));
-    const todayRevenue = todayOrders.reduce((sum, order) => sum + order.price, 0);
+    const todayRevenue = todayOrders.reduce((sum, order) => sum + calculateGrossRevenue(order), 0);
 
     const todayCommissionReceived = todayOrders
-      .filter(o => o.paymentStatus === PaymentStatus.Paid)
-      .reduce((sum, order) => sum + order.price, 0) * (agentCommission / 100);
+      .reduce((sum, order) => sum + calculateGrossRevenue(order), 0) * (agentCommission / 100);
 
     const unpaidOrders = orders.filter(o => o.paymentStatus === PaymentStatus.Unpaid);
-    const unpaidDebt = unpaidOrders.reduce((sum, order) => sum + (order.actual_revenue != null ? order.actual_revenue : order.price * (1 - agentCommission / 100)), 0);
+    const unpaidDebt = unpaidOrders.reduce((sum, order) => sum + calculateNetRevenue(order, agentCommission), 0);
 
     const groupedByDate = orders.reduce((acc, order) => {
       const date = format(parseISO(order.sold_at), 'dd/MM/yyyy');
@@ -145,8 +159,10 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
       'Tên khách Hàng': o.account_name,
       'Email khách': o.account_email,
       'Gói': packages.find(p => p.id === o.packageId)?.name || 'N/A',
-      'Giá gói gốc (VND)': o.price,
-      'Thực Thu (VND)': o.actual_revenue != null ? o.actual_revenue : o.price * (1 - discount / 100),
+      'Giá gói gốc (VND)': o.paymentStatus === PaymentStatus.Refunded ? 0 : o.price,
+      'Hoa hồng nhận về (VND)': o.paymentStatus === PaymentStatus.Refunded ? 0 : o.price * (discount / 100),
+      'Tiền thanh toán cho cty (VND)': calculateNetRevenue(o, discount),
+      'Ghi chú': o.notes || '',
       'Ngày hoàn thành': format(parseISO(o.sold_at), 'dd/MM/yyyy HH:mm'),
       'Trạng thái': o.status === ActivationStatus.Activated ? 'Đã duyệt' : 'Chờ duyệt',
       'Thanh toán': o.paymentStatus
@@ -279,7 +295,7 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
           <p className="text-2xl font-bold text-yellow-400">{formatCurrency(filteredStats.netRevenueCompany)}</p>
         </div>
         <div>
-          <p className="text-sm text-slate-400 uppercase tracking-wider">Hoa hồng nhận về (Paid)</p>
+          <p className="text-sm text-slate-400 uppercase tracking-wider">Hoa hồng nhận về (Tất cả)</p>
           <p className="text-2xl font-bold text-green-400">{formatCurrency(filteredStats.agentReceived)}</p>
         </div>
       </div>
@@ -294,20 +310,57 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
         </div>
         <table className="w-full text-left table-auto">
           <thead>
-            <tr className="border-b border-slate-700"><th className="p-3 text-lg font-semibold tracking-wide">Tài khoản</th><th className="p-3 text-lg font-semibold tracking-wide">Gói</th><th className="p-3 text-lg font-semibold tracking-wide">Giá</th><th className="p-3 text-lg font-semibold tracking-wide">Tiền thanh toán cho cty</th><th className="p-3 text-lg font-semibold tracking-wide">Ngày bán</th><th className="p-3 text-lg font-semibold tracking-wide">Tình trạng approve</th><th className="p-3 text-lg font-semibold tracking-wide">Thanh toán</th></tr>
+            <tr className="border-b border-slate-700">
+              <th className="p-3 text-sm font-semibold tracking-wide">STT</th>
+              <th className="p-3 text-sm font-semibold tracking-wide">Tài khoản</th>
+              <th className="p-3 text-sm font-semibold tracking-wide">Gói</th>
+              <th className="p-3 text-sm font-semibold tracking-wide">Giá</th>
+              <th className="p-3 text-sm font-semibold tracking-wide">Hoa hồng</th>
+              <th className="p-3 text-sm font-semibold tracking-wide">Thanh toán cho cty</th>
+              <th className="p-3 text-sm font-semibold tracking-wide">Ghi chú</th>
+              <th className="p-3 text-sm font-semibold tracking-wide">Ngày bán</th>
+              <th className="p-3 text-sm font-semibold tracking-wide">Tình trạng approve</th>
+              <th className="p-3 text-sm font-semibold tracking-wide">Thanh toán</th>
+            </tr>
           </thead>
           <tbody>
-            {paginatedOrders.map(order => {
-              const netRevenue = order.actual_revenue != null ? order.actual_revenue : order.price * (1 - (user.discountPercentage || 0) / 100);
+            {paginatedOrders.map((order, index) => {
               return (
                 <tr key={order.id} className="border-b border-slate-700 hover:bg-slate-700/50">
-                  <td className="p-3"><p className="font-bold text-lg">{order.account_name}</p><p className="text-sm text-slate-400">{order.account_email}</p></td>
-                  <td className="p-3 text-lg">{getPackageName(order.packageId)}</td>
-                  <td className="p-3 text-lg">{formatCurrency(order.price)}</td>
-                  <td className="p-3 text-lg font-semibold text-yellow-400">{formatCurrency(netRevenue)}</td>
-                  <td className="p-3 text-lg">{format(parseISO(order.sold_at), 'dd/MM/yyyy')}</td>
-                  <td className="p-3"><span className={`px-2 py-1 text-sm font-semibold rounded-full ${order.status === ActivationStatus.Activated ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{order.status === ActivationStatus.Activated ? 'Approved' : 'Not Approved'}</span></td>
-                  <td className="p-3"><span className={`px-2 py-1 text-sm font-semibold rounded-full ${order.paymentStatus === PaymentStatus.Paid ? 'bg-blue-500/20 text-blue-400' : 'bg-red-500/20 text-red-400'}`}>{order.paymentStatus}</span></td>
+                  <td className="p-3 text-sm">{(currentPage - 1) * itemsPerPage + index + 1}</td>
+                  <td className="p-3"><p className="font-bold text-sm text-slate-300">{order.account_email}</p></td>
+                  <td className="p-3 text-sm">{getPackageName(order.packageId)}</td>
+                  <td className="p-3 text-sm font-bold text-slate-300">
+                    {order.paymentStatus === PaymentStatus.Refunded ? (
+                      <span className="line-through opacity-50">{formatCurrency(order.price)}</span>
+                    ) : formatCurrency(order.price)}
+                  </td>
+                  <td className="p-3 text-sm font-bold text-green-400">
+                    {order.paymentStatus === PaymentStatus.Refunded ? (
+                      <span className="line-through opacity-50">{formatCurrency(order.price * ((user.discountPercentage || 0) / 100))}</span>
+                    ) : formatCurrency(order.price * ((user.discountPercentage || 0) / 100))}
+                  </td>
+                  <td className="p-3 text-sm font-bold text-yellow-400">
+                    {order.paymentStatus === PaymentStatus.Refunded ? (
+                      <span className="line-through opacity-50">{formatCurrency(calculateNetRevenue(order, user.discountPercentage || 0))}</span>
+                    ) : formatCurrency(calculateNetRevenue(order, user.discountPercentage || 0))}
+                  </td>
+                  <td
+                    className="p-3 text-sm text-slate-400 max-w-[150px] truncate cursor-pointer hover:text-white transition-colors"
+                    title="Nhấn để xem chi tiết"
+                    onClick={() => { if (order.notes) alert(`Ghi chú:\n${order.notes}`); }}
+                  >
+                    {order.notes}
+                  </td>
+                  <td className="p-3 text-sm">{format(parseISO(order.sold_at), 'dd/MM/yyyy')}</td>
+                  <td className="p-3"><span className={`px-2 py-1 text-xs font-semibold rounded-full ${order.status === ActivationStatus.Activated ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{order.status === ActivationStatus.Activated ? 'Approved' : 'Not Approved'}</span></td>
+                  <td className="p-3">
+                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${order.paymentStatus === PaymentStatus.Paid ? 'bg-blue-500/20 text-blue-400' :
+                        order.paymentStatus === PaymentStatus.Refunded ? 'bg-slate-500/20 text-slate-400' : 'bg-red-500/20 text-red-400'
+                      }`}>
+                      {order.paymentStatus}
+                    </span>
+                  </td>
                 </tr>
               )
             })}
