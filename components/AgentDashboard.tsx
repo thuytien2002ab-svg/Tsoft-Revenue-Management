@@ -28,6 +28,11 @@ const calculateGrossRevenue = (order: Order): number => {
   return order.price;
 };
 
+const calculateAgentCommission = (order: Order, agentDiscountPct: number): number => {
+  if (order.paymentStatus === PaymentStatus.Refunded) return 0;
+  return Math.max(0, calculateGrossRevenue(order) - calculateNetRevenue(order, agentDiscountPct));
+};
+
 const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [packages, setPackages] = useState<Package[]>([]);
@@ -75,7 +80,7 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
       }
 
       return emailMatch && dateMatch;
-    }).sort((a, b) => new Date(b.sold_at).getTime() - new Date(a.sold_at).getTime());
+    }).reverse();
   }, [orders, emailFilter, dateFilterStart, dateFilterEnd]);
 
   // Reset to first page when filters change
@@ -97,7 +102,7 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
       return sum + calculateNetRevenue(order, agentCommission);
     }, 0);
     const agentReceived = filteredOrders
-      .reduce((sum, order) => sum + (calculateGrossRevenue(order) * (agentCommission / 100)), 0);
+      .reduce((sum, order) => sum + calculateAgentCommission(order, agentCommission), 0);
 
     return { grossRevenue, netRevenueCompany, agentReceived };
   }, [filteredOrders, agentCommission]);
@@ -108,13 +113,13 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
     const monthlyRevenue = monthlyOrders.reduce((sum, order) => sum + calculateGrossRevenue(order), 0);
 
     const monthlyCommissionReceived = monthlyOrders
-      .reduce((sum, order) => sum + calculateGrossRevenue(order), 0) * (agentCommission / 100);
+      .reduce((sum, order) => sum + calculateAgentCommission(order, agentCommission), 0);
 
     const todayOrders = orders.filter(o => isToday(parseISO(o.sold_at)));
     const todayRevenue = todayOrders.reduce((sum, order) => sum + calculateGrossRevenue(order), 0);
 
     const todayCommissionReceived = todayOrders
-      .reduce((sum, order) => sum + calculateGrossRevenue(order), 0) * (agentCommission / 100);
+      .reduce((sum, order) => sum + calculateAgentCommission(order, agentCommission), 0);
 
     const unpaidOrders = orders.filter(o => o.paymentStatus === PaymentStatus.Unpaid);
     const unpaidDebt = unpaidOrders.reduce((sum, order) => sum + calculateNetRevenue(order, agentCommission), 0);
@@ -123,9 +128,9 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
       const date = format(parseISO(order.sold_at), 'dd/MM/yyyy');
       if (!acc[date]) acc[date] = { count: 0, gross: 0, commission: 0 };
       acc[date].count += 1;
-      acc[date].gross += order.price;
+      acc[date].gross += calculateGrossRevenue(order);
       if (order.paymentStatus === PaymentStatus.Paid) {
-        acc[date].commission += order.price * (agentCommission / 100);
+        acc[date].commission += calculateAgentCommission(order, agentCommission);
       }
       return acc;
     }, {} as Record<string, { count: number; gross: number; commission: number }>);
@@ -160,7 +165,7 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
       'Email khách': o.account_email,
       'Gói': packages.find(p => p.id === o.packageId)?.name || 'N/A',
       'Giá gói gốc (VND)': o.paymentStatus === PaymentStatus.Refunded ? 0 : o.price,
-      'Hoa hồng nhận về (VND)': o.paymentStatus === PaymentStatus.Refunded ? 0 : o.price * (discount / 100),
+      'Hoa hồng nhận về (VND)': calculateAgentCommission(o, discount),
       'Tiền thanh toán cho cty (VND)': calculateNetRevenue(o, discount),
       'Ghi chú': o.notes || '',
       'Ngày hoàn thành': format(parseISO(o.sold_at), 'dd/MM/yyyy HH:mm'),
@@ -337,8 +342,8 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
                   </td>
                   <td className="p-3 text-sm font-bold text-green-400">
                     {order.paymentStatus === PaymentStatus.Refunded ? (
-                      <span className="line-through opacity-50">{formatCurrency(order.price * ((user.discountPercentage || 0) / 100))}</span>
-                    ) : formatCurrency(order.price * ((user.discountPercentage || 0) / 100))}
+                      <span className="line-through opacity-50">{formatCurrency(calculateAgentCommission(order, user.discountPercentage || 0))}</span>
+                    ) : formatCurrency(calculateAgentCommission(order, user.discountPercentage || 0))}
                   </td>
                   <td className="p-3 text-sm font-bold text-yellow-400">
                     {order.paymentStatus === PaymentStatus.Refunded ? (
@@ -356,7 +361,7 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
                   <td className="p-3"><span className={`px-2 py-1 text-xs font-semibold rounded-full ${order.status === ActivationStatus.Activated ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'}`}>{order.status === ActivationStatus.Activated ? 'Approved' : 'Not Approved'}</span></td>
                   <td className="p-3">
                     <span className={`px-2 py-1 text-xs font-semibold rounded-full ${order.paymentStatus === PaymentStatus.Paid ? 'bg-blue-500/20 text-blue-400' :
-                        order.paymentStatus === PaymentStatus.Refunded ? 'bg-slate-500/20 text-slate-400' : 'bg-red-500/20 text-red-400'
+                      order.paymentStatus === PaymentStatus.Refunded ? 'bg-slate-500/20 text-slate-400' : 'bg-red-500/20 text-red-400'
                       }`}>
                       {order.paymentStatus}
                     </span>
