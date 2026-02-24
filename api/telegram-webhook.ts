@@ -334,6 +334,34 @@ export default async function handler(req: any, res: any) {
             ].join('\n'));
             return res.status(200).json({ ok: true });
         }
+        // === LENH /daily - Danh sach dai ly (CHI ADMIN) ===
+        if (text.startsWith('/daily') || text.startsWith('/danhsach')) {
+            if (!isAdmin) {
+                return res.status(200).json({ ok: true });
+            }
+            const { data: agents } = await supabase
+                .from('users')
+                .select('name, username, discountPercentage, isActive')
+                .eq('role', 'AGENT')
+                .order('name');
+
+            if (!agents || agents.length === 0) {
+                await sendTelegram(chatId, 'Ch\u01b0a c\u00f3 \u0111\u1ea1i l\u00fd n\u00e0o.');
+                return res.status(200).json({ ok: true });
+            }
+
+            const lines = agents.map((a: any, i: number) => {
+                const status = a.isActive ? '\u2705' : '\u274c';
+                return (i + 1) + '. ' + status + ' ' + a.name + ' - Username: ' + a.username + ' (CK ' + (a.discountPercentage || 0) + '%)';
+            });
+
+            await sendTelegram(chatId, [
+                '\ud83d\udc65 Danh s\u00e1ch \u0111\u1ea1i l\u00fd (' + agents.length + '):',
+                '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+                ...lines,
+            ].join('\n'));
+            return res.status(200).json({ ok: true });
+        }
 
         return res.status(200).json({ ok: true });
     } catch (err: any) {
