@@ -74,6 +74,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     const [debtStartDate, setDebtStartDate] = useState('');
     const [debtEndDate, setDebtEndDate] = useState('');
 
+    // Pagination states
+    const ITEMS_PER_PAGE = 20;
+    const [currentOrderPage, setCurrentOrderPage] = useState(1);
+    const [currentAgentPage, setCurrentAgentPage] = useState(1);
+
     const [chartPeriod, setChartPeriod] = useState<'week' | 'month' | 'year'>('week');
 
 
@@ -390,6 +395,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
         setOrderEmailFilter('');
         setOrderApprovalFilter('all');
         setOrderPaymentFilter('all');
+        setCurrentOrderPage(1);
     };
 
     const handleClearProfitFilters = () => {
@@ -510,6 +516,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
             }
             return sum;
         }, 0);
+        // Hoa hồng thực tế = Gross - Net (bao gồm cả chiết khấu mặc định + giảm thêm theo đơn)
+        const filteredCommission = filteredGrossRevenue - filteredNetRevenue;
 
         return (
             <div className="p-6 overflow-x-auto bg-slate-800 rounded-lg shadow-lg">
@@ -570,6 +578,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                         <p className="text-sm text-slate-400 uppercase tracking-wider">Tổng số tiền thực thu (Net)</p>
                         <p className="text-2xl font-bold text-green-400">{formatCurrency(filteredNetRevenue)}</p>
                     </div>
+                    <div>
+                        <p className="text-sm text-slate-400 uppercase tracking-wider">Hoa hồng chi trả</p>
+                        <p className="text-2xl font-bold text-yellow-400">{formatCurrency(filteredCommission)}</p>
+                    </div>
                     <div className="cursor-pointer group" onClick={() => setIsAdminUnpaidModalOpen(true)}>
                         <p className="text-sm text-slate-400 uppercase tracking-wider group-hover:text-red-300 transition-colors">Công nợ <span className="underline ml-1 text-xs opacity-70">(Nhấn để xem)</span></p>
                         <p className="text-2xl font-bold text-red-400 group-hover:scale-105 transition-transform origin-left">{formatCurrency(filteredDebt)}</p>
@@ -593,12 +605,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                         </tr>
                     </thead>
                     <tbody>
-                        {filteredOrders.map((order, index) => {
+                        {filteredOrders.slice((currentOrderPage - 1) * ITEMS_PER_PAGE, currentOrderPage * ITEMS_PER_PAGE).map((order, index) => {
                             const agent = agents.find(a => a.id === order.agentId);
                             const discount = agent?.discountPercentage || 0;
+                            const globalIndex = (currentOrderPage - 1) * ITEMS_PER_PAGE + index + 1;
                             return (
                                 <tr key={order.id} className="border-b border-slate-700 hover:bg-slate-700/50">
-                                    <td className="p-3 text-sm">{index + 1}</td>
+                                    <td className="p-3 text-sm">{globalIndex}</td>
                                     <td className="p-3"><p className="font-bold text-sm text-slate-300">{order.account_email}</p></td>
                                     <td className="p-3 text-sm">{getPackageName(order.packageId)}</td>
                                     <td className="p-3 text-sm font-bold text-slate-300">
@@ -651,53 +664,134 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                     </tbody>
                 </table>
                 {filteredOrders.length === 0 && <p className="mt-4 text-center text-slate-400">Không có đơn hàng nào khớp.</p>}
+                {/* PAGINATION */}
+                {(() => {
+                    const totalPages = Math.ceil(filteredOrders.length / ITEMS_PER_PAGE);
+                    if (totalPages <= 1) return null;
+                    return (
+                        <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-700">
+                            <p className="text-sm text-slate-400">
+                                Hiển thị {((currentOrderPage - 1) * ITEMS_PER_PAGE) + 1}–{Math.min(currentOrderPage * ITEMS_PER_PAGE, filteredOrders.length)} / {filteredOrders.length} đơn hàng
+                            </p>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => setCurrentOrderPage(p => Math.max(1, p - 1))}
+                                    disabled={currentOrderPage === 1}
+                                    className="px-3 py-1 text-sm font-semibold text-white bg-slate-600 rounded-md hover:bg-slate-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                                >← Trước</button>
+                                {Array.from({ length: totalPages }, (_, i) => i + 1).map(page => (
+                                    <button
+                                        key={page}
+                                        onClick={() => setCurrentOrderPage(page)}
+                                        className={`px-3 py-1 text-sm font-semibold rounded-md ${page === currentOrderPage
+                                            ? 'bg-primary text-white'
+                                            : 'text-slate-400 bg-slate-700 hover:bg-slate-600'
+                                            }`}
+                                    >{page}</button>
+                                ))}
+                                <button
+                                    onClick={() => setCurrentOrderPage(p => Math.min(totalPages, p + 1))}
+                                    disabled={currentOrderPage === totalPages}
+                                    className="px-3 py-1 text-sm font-semibold text-white bg-slate-600 rounded-md hover:bg-slate-500 disabled:opacity-40 disabled:cursor-not-allowed"
+                                >Sau →</button>
+                            </div>
+                        </div>
+                    );
+                })()}
             </div>
         );
     };
 
-    const renderAgentsTab = () => (
-        <div className="p-6 bg-slate-800 rounded-lg shadow-lg">
-            <div className="flex items-center justify-between mb-6">
-                <h2 className="text-3xl font-bold text-slate-100">Quản lý Đại lý ({agents.length})</h2>
-                <button onClick={() => handleOpenAgentModal(null)} className="px-5 py-2 text-lg font-semibold text-white transition-colors duration-200 rounded-md bg-primary hover:bg-primary-focus">+ Thêm Đại lý</button>
-            </div>
-            <div className="overflow-x-auto">
-                <table className="w-full text-left table-auto">
-                    <thead>
-                        <tr className="border-b border-slate-700">
-                            <th className="p-3 text-lg font-semibold tracking-wide">Tên</th>
-                            <th className="p-3 text-lg font-semibold tracking-wide">Username</th>
-                            <th className="p-3 text-lg font-semibold tracking-wide">Tổng Doanh thu</th>
-                            <th className="p-3 text-lg font-semibold tracking-wide">Lợi nhuận phải trả</th>
-                            <th className="p-3 text-lg font-semibold tracking-wide">Chiết khấu</th>
-                            <th className="p-3 text-lg font-semibold tracking-wide">Trạng thái</th>
-                            <th className="p-3 text-lg font-semibold tracking-wide">Hành động</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {agents.map(agent => {
-                            const agentOrders = orders.filter(o => o.agentId === agent.id);
-                            const totalGrossRevenue = agentOrders.reduce((sum, order) => sum + order.price, 0);
-                            const commissionPayable = totalGrossRevenue * ((agent.discountPercentage || 0) / 100);
+    const renderAgentsTab = () => {
+        const totalAgentPages = Math.ceil(agents.length / ITEMS_PER_PAGE);
+        const pagedAgents = agents.slice((currentAgentPage - 1) * ITEMS_PER_PAGE, currentAgentPage * ITEMS_PER_PAGE);
+        return (
+            <div className="p-6 bg-slate-800 rounded-lg shadow-lg">
+                <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-3xl font-bold text-slate-100">Quản lý Đại lý ({agents.length})</h2>
+                    <button onClick={() => handleOpenAgentModal(null)} className="px-5 py-2 text-lg font-semibold text-white transition-colors duration-200 rounded-md bg-primary hover:bg-primary-focus">+ Thêm Đại lý</button>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left table-auto">
+                        <thead>
+                            <tr className="border-b border-slate-700">
+                                <th className="p-3 text-lg font-semibold tracking-wide">Tên</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide">Username</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide">Tổng Doanh thu</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide">Hoa hồng chi trả</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide">Lợi nhuận cty</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide">Chiết khấu</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide">Trạng thái</th>
+                                <th className="p-3 text-lg font-semibold tracking-wide">Hành động</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {pagedAgents.map(agent => {
+                                const agentOrders = orders.filter(o => o.agentId === agent.id);
+                                const totalGrossRevenue = agentOrders.reduce((sum, order) => sum + calculateGrossRevenue(order), 0);
+                                const companyProfit = agentOrders.reduce((sum, order) => {
+                                    const discount = agent.discountPercentage || 0;
+                                    return sum + calculateNetRevenue(order, discount);
+                                }, 0);
+                                const commissionPayable = totalGrossRevenue - companyProfit;
 
-                            return (
-                                <tr key={agent.id} className="border-b border-slate-700 hover:bg-slate-700/50">
-                                    <td className="p-3 text-lg font-bold">{agent.name}</td>
-                                    <td className="p-3 text-lg text-slate-400">{agent.username}</td>
-                                    <td className="p-3 text-lg text-primary">{formatCurrency(totalGrossRevenue)}</td>
-                                    <td className="p-3 text-lg font-semibold text-green-400">{formatCurrency(commissionPayable)}</td>
-                                    <td className="p-3 text-lg">{agent.discountPercentage || 0}%</td>
-                                    <td className="p-3"><span className={`px - 2 py - 1 text - sm font - semibold rounded - full ${agent.isActive ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'} `}>{agent.isActive ? 'Hoạt động' : 'Đã khoá'}</span></td>
-                                    <td className="p-3"><button onClick={() => handleOpenAgentModal(agent)} className="px-4 py-1 font-bold text-white bg-blue-600 rounded-md hover:bg-blue-700">Sửa</button></td>
-                                </tr>
-                            )
-                        })}
-                    </tbody>
-                </table>
+                                return (
+                                    <tr key={agent.id} className="border-b border-slate-700 hover:bg-slate-700/50">
+                                        <td className="p-3 text-lg font-bold">{agent.name}</td>
+                                        <td className="p-3 text-lg text-slate-400">{agent.username}</td>
+                                        <td className="p-3 text-lg text-primary">{formatCurrency(totalGrossRevenue)}</td>
+                                        <td className="p-3 text-lg font-semibold text-yellow-400">{formatCurrency(commissionPayable)}</td>
+                                        <td className="p-3 text-lg font-semibold text-green-400">{formatCurrency(companyProfit)}</td>
+                                        <td className="p-3 text-lg">{agent.discountPercentage || 0}%</td>
+                                        <td className="p-3"><span className={`px - 2 py - 1 text - sm font - semibold rounded - full ${agent.isActive ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'} `}>{agent.isActive ? 'Hoạt động' : 'Đã khoá'}</span></td>
+                                        <td className="p-3"><button onClick={() => handleOpenAgentModal(agent)} className="px-4 py-1 font-bold text-white bg-blue-600 rounded-md hover:bg-blue-700">Sửa</button></td>
+                                    </tr>
+                                )
+                            })}
+                        </tbody>
+                        <tfoot>
+                            {(() => {
+                                const grandGross = agents.reduce((sum, agent) => {
+                                    const agentOrders = orders.filter(o => o.agentId === agent.id);
+                                    return sum + agentOrders.reduce((s, order) => s + calculateGrossRevenue(order), 0);
+                                }, 0);
+                                const grandProfit = agents.reduce((sum, agent) => {
+                                    const agentOrders = orders.filter(o => o.agentId === agent.id);
+                                    const discount = agent.discountPercentage || 0;
+                                    return sum + agentOrders.reduce((s, order) => s + calculateNetRevenue(order, discount), 0);
+                                }, 0);
+                                const grandCommission = grandGross - grandProfit;
+                                return (
+                                    <tr className="border-t-2 border-slate-500 bg-slate-700/40">
+                                        <td className="p-3 text-lg font-bold text-white" colSpan={2}>TỔNG CỘNG</td>
+                                        <td className="p-3 text-lg font-bold text-primary">{formatCurrency(grandGross)}</td>
+                                        <td className="p-3 text-lg font-bold text-yellow-300">{formatCurrency(grandCommission)}</td>
+                                        <td className="p-3 text-lg font-bold text-green-300">{formatCurrency(grandProfit)}</td>
+                                        <td className="p-3" colSpan={3}></td>
+                                    </tr>
+                                );
+                            })()}
+                        </tfoot>
+                    </table>
+                    {/* AGENT PAGINATION */}
+                    {totalAgentPages > 1 && (
+                        <div className="flex items-center justify-between mt-4 pt-4 border-t border-slate-700">
+                            <p className="text-sm text-slate-400">
+                                Hiển thị {((currentAgentPage - 1) * ITEMS_PER_PAGE) + 1}–{Math.min(currentAgentPage * ITEMS_PER_PAGE, agents.length)} / {agents.length} đại lý
+                            </p>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => setCurrentAgentPage(p => Math.max(1, p - 1))} disabled={currentAgentPage === 1} className="px-3 py-1 text-sm font-semibold text-white bg-slate-600 rounded-md hover:bg-slate-500 disabled:opacity-40 disabled:cursor-not-allowed">← Trước</button>
+                                {Array.from({ length: totalAgentPages }, (_, i) => i + 1).map(page => (
+                                    <button key={page} onClick={() => setCurrentAgentPage(page)} className={`px-3 py-1 text-sm font-semibold rounded-md ${page === currentAgentPage ? 'bg-primary text-white' : 'text-slate-400 bg-slate-700 hover:bg-slate-600'}`}>{page}</button>
+                                ))}
+                                <button onClick={() => setCurrentAgentPage(p => Math.min(totalAgentPages, p + 1))} disabled={currentAgentPage === totalAgentPages} className="px-3 py-1 text-sm font-semibold text-white bg-slate-600 rounded-md hover:bg-slate-500 disabled:opacity-40 disabled:cursor-not-allowed">Sau →</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
-        </div>
-    );
-
+        );
+    };
     const renderDebtTab = () => (
         <div className="p-6 overflow-x-auto bg-slate-800 rounded-lg shadow-lg">
             <div className="flex flex-col items-start justify-between gap-4 mb-6 md:flex-row md:items-center">
