@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 const TELEGRAM_BOT_TOKEN = '8747808288:AAGh6MLqO33yrBCAlIFHchulYPFvov7yRxE';
 const TELEGRAM_CHAT_ID = '6648239426';
 
-export default async function handler(req: any, res: any) {
+export default async function handler(_req: any, res: any) {
     try {
         const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
         const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || '';
@@ -15,7 +15,11 @@ export default async function handler(req: any, res: any) {
         const vietnamNow = new Date(now.getTime() + vnOffset);
         const todayStr = vietnamNow.toISOString().split('T')[0];
 
-        // Start/end of today VN in ISO format
+        // Format ngay/thang/nam
+        const parts = todayStr.split('-');
+        const dateDisplay = parts[2] + '/' + parts[1] + '/' + parts[0];
+
+        // Start/end of today VN in UTC
         const startUTC = new Date(new Date(todayStr + 'T00:00:00+07:00').getTime()).toISOString();
         const endUTC = new Date(new Date(todayStr + 'T23:59:59+07:00').getTime()).toISOString();
 
@@ -29,6 +33,7 @@ export default async function handler(req: any, res: any) {
             return res.status(500).json({ error: error.message });
         }
 
+        // Loc bo don hoan tien
         const validOrders = (orders || []).filter(
             (o: any) => o.paymentStatus !== '\u0110\u00c3 HO\u00c0N TI\u1ec0N'
         );
@@ -48,13 +53,17 @@ export default async function handler(req: any, res: any) {
         const fmt = (n: number) => n.toLocaleString('vi-VN');
 
         const message = [
-            '\ud83d\udcca [Tsoft] Bao cao ngay ' + todayStr + ':',
-            '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
-            '\ud83d\udcb0 Doanh so: ' + fmt(totalGross) + ' VND',
-            '\ud83e\udd1d Hoa hong dai ly: ' + fmt(totalCommission) + ' VND',
-            '\ud83d\udcc8 Loi nhuan cong ty: ' + fmt(totalNetProfit) + ' VND',
-            '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
-            '\ud83d\udce6 Tong don: ' + validOrders.length + ' don',
+            '\ud83d\udcca B\u00e1o c\u00e1o doanh thu Tifo',
+            'Ng\u00e0y ' + dateDisplay,
+            '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+            '',
+            '\ud83d\udcb0 T\u1ed5ng doanh s\u1ed1: ' + fmt(totalGross) + ' VN\u0110',
+            '\ud83e\udd1d Hoa h\u1ed3ng \u0111\u1ea1i l\u00fd: ' + fmt(totalCommission) + ' VN\u0110',
+            '\ud83d\udcc8 L\u1ee3i nhu\u1eadn c\u00f4ng ty: ' + fmt(totalNetProfit) + ' VN\u0110',
+            '',
+            '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+            '\ud83d\udce6 T\u1ed5ng s\u1ed1 \u0111\u01a1n: ' + validOrders.length + ' \u0111\u01a1n h\u00e0ng',
+            '\u23f0 Th\u1eddi gian g\u1eedi: ' + new Date(now.getTime() + vnOffset).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
         ].join('\n');
 
         const telegramRes = await fetch(
