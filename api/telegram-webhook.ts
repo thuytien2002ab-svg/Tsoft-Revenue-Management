@@ -127,6 +127,70 @@ export default async function handler(req: any, res: any) {
         const text = message.text.trim();
         const supabase = getSupabase();
 
+        // === LENH /themdon (admin them don nhanh, khong can reply) ===
+        // Cu phap: /themdon email@gmail.com goi 1 thang thuytien
+        //          /themdon email@gmail.com 6 thang + vip 1 thang thuytien
+        if (text.startsWith('/themdon ') && message.from?.id === ADMIN_CHAT_ID) {
+            const content = text.replace('/themdon ', '').trim();
+
+            // Username la tu cuoi cung
+            const words = content.split(/\s+/);
+            const username = words[words.length - 1].toLowerCase();
+
+            // Phan con lai la thong tin don hang (bo username cuoi)
+            const orderText = words.slice(0, words.length - 1).join(' ');
+
+            const order = parseOrder(orderText);
+            if (!order) {
+                await sendTelegram(chatId,
+                    '\u274c Kh\u00f4ng \u0111\u1ecdc \u0111\u01b0\u1ee3c \u0111\u01a1n. C\u00fa ph\u00e1p:\n/themdon email@gmail.com 6 th\u00e1ng + vip 1 th\u00e1ng thuytien'
+                );
+                return res.status(200).json({ ok: true });
+            }
+
+            // Tim dai ly
+            const { data: agent, error: agentErr } = await supabase
+                .from('users').select('*').eq('username', username).single();
+
+            if (agentErr || !agent) {
+                await sendTelegram(chatId, '\u274c Kh\u00f4ng t\u00ecm th\u1ea5y \u0111\u1ea1i l\u00fd "' + username + '".');
+                return res.status(200).json({ ok: true });
+            }
+
+            const discount = agent.discountPercentage || 0;
+            const actualRevenue = Math.round(order.totalPrice * (1 - discount / 100));
+
+            const { error: insertErr } = await supabase.from('orders').insert({
+                account_name: order.email.split('@')[0],
+                account_email: order.email,
+                packageId: order.packageId,
+                price: order.totalPrice,
+                actual_revenue: actualRevenue,
+                status: 'CH\u01af\u0041 K\u00cdCH HO\u1ea0T',
+                paymentStatus: 'CH\u01af\u0041 THANH TO\u00c1N',
+                agentId: agent.id,
+                sold_at: new Date().toISOString(),
+                notes: order.notes,
+            });
+
+            if (insertErr) {
+                await sendTelegram(chatId, '\u274c L\u1ed7i: ' + insertErr.message);
+                return res.status(200).json({ ok: true });
+            }
+
+            const fmt = (n: number) => n.toLocaleString('vi-VN');
+            await sendTelegram(chatId, [
+                '\u2705 \u0110\u00e3 t\u1ea1o \u0111\u01a1n th\u00e0nh c\u00f4ng!',
+                '',
+                '\ud83d\udce7 Email: ' + order.email,
+                '\ud83d\udce6 ' + order.notes,
+                '\ud83d\udcb0 Gi\u00e1: ' + fmt(order.totalPrice) + ' VN\u0110',
+                '\ud83d\udcc8 Doanh thu th\u1ef1c: ' + fmt(actualRevenue) + ' VN\u0110',
+                '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agent.name + ' (' + username + ')',
+            ].join('\n'));
+            return res.status(200).json({ ok: true });
+        }
+
         // === LENH /done username (admin reply de tao don) ===
         if (text.startsWith('/done ') && message.from?.id === ADMIN_CHAT_ID) {
             const username = text.replace('/done ', '').trim().toLowerCase();
@@ -194,8 +258,12 @@ export default async function handler(req: any, res: any) {
             return res.status(200).json({ ok: true });
         }
 
-        // === LENH /baocao ===
+        // === LENH /baocao (CHI ADMIN) ===
         if (text.startsWith('/baocao') || text.startsWith('/report')) {
+            if (message.from?.id !== ADMIN_CHAT_ID) {
+                await sendTelegram(chatId, '\u274c Ch\u1ec9 Admin m\u1edbi \u0111\u01b0\u1ee3c xem b\u00e1o c\u00e1o.');
+                return res.status(200).json({ ok: true });
+            }
             const dateParam = text.replace('/baocao', '').replace('/report', '').trim();
             const now = new Date();
             const vnNow = new Date(now.getTime() + 7 * 60 * 60 * 1000);
@@ -225,8 +293,11 @@ export default async function handler(req: any, res: any) {
             return res.status(200).json({ ok: true });
         }
 
-        // === LENH /help hoac /start ===
+        // === LENH /help hoac /start (CHI ADMIN) ===
         if (text.startsWith('/help') || text.startsWith('/start')) {
+            if (message.from?.id !== ADMIN_CHAT_ID) {
+                return res.status(200).json({ ok: true });
+            }
             await sendTelegram(chatId, [
                 '\ud83e\udd16 Bot B\u00e1o c\u00e1o Tifo',
                 '',
