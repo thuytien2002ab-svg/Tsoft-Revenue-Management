@@ -1,7 +1,24 @@
 import { createClient } from '@supabase/supabase-js';
 
 const TELEGRAM_BOT_TOKEN = '8747808288:AAGh6MLqO33yrBCAlIFHchulYPFvov7yRxE';
-const ADMIN_CHAT_ID = 6648239426;
+
+async function isGroupAdmin(chatId: number | string, userId: number): Promise<boolean> {
+    try {
+        const res = await fetch(
+            'https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/getChatAdministrators',
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: chatId }),
+            }
+        );
+        const data = await res.json();
+        if (!data.ok) return false;
+        return data.result.some((admin: any) => admin.user.id === userId);
+    } catch {
+        return false;
+    }
+}
 
 // Bang gia goi
 const PACKAGES: Record<string, { id: number; price: number }> = {
@@ -126,11 +143,13 @@ export default async function handler(req: any, res: any) {
         const chatId = message.chat.id;
         const text = message.text.trim();
         const supabase = getSupabase();
+        const userId = message.from?.id;
+        const isAdmin = userId ? await isGroupAdmin(chatId, userId) : false;
 
         // === LENH /themdon (admin them don nhanh, khong can reply) ===
         // Cu phap: /themdon email@gmail.com goi 1 thang thuytien
         //          /themdon email@gmail.com 6 thang + vip 1 thang thuytien
-        if (text.startsWith('/themdon ') && message.from?.id === ADMIN_CHAT_ID) {
+        if (text.startsWith('/themdon ') && isAdmin) {
             const content = text.replace('/themdon ', '').trim();
 
             // Username la tu cuoi cung
@@ -192,7 +211,7 @@ export default async function handler(req: any, res: any) {
         }
 
         // === LENH /done username (admin reply de tao don) ===
-        if (text.startsWith('/done ') && message.from?.id === ADMIN_CHAT_ID) {
+        if (text.startsWith('/done ') && isAdmin) {
             const username = text.replace('/done ', '').trim().toLowerCase();
 
             // Phai reply vao tin nhan don hang
@@ -260,7 +279,7 @@ export default async function handler(req: any, res: any) {
 
         // === LENH /baocao (CHI ADMIN) ===
         if (text.startsWith('/baocao') || text.startsWith('/report')) {
-            if (message.from?.id !== ADMIN_CHAT_ID) {
+            if (!isAdmin) {
                 await sendTelegram(chatId, '\u274c Ch\u1ec9 Admin m\u1edbi \u0111\u01b0\u1ee3c xem b\u00e1o c\u00e1o.');
                 return res.status(200).json({ ok: true });
             }
@@ -295,7 +314,7 @@ export default async function handler(req: any, res: any) {
 
         // === LENH /help hoac /start (CHI ADMIN) ===
         if (text.startsWith('/help') || text.startsWith('/start')) {
-            if (message.from?.id !== ADMIN_CHAT_ID) {
+            if (!isAdmin) {
                 return res.status(200).json({ ok: true });
             }
             await sendTelegram(chatId, [
