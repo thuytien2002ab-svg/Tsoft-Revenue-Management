@@ -1,8 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 
 const TELEGRAM_BOT_TOKEN = '8747808288:AAGh6MLqO33yrBCAlIFHchulYPFvov7yRxE';
+const OWNER_ID = 6648239426; // Chat rieng: chi owner duoc dung
 
-async function isGroupAdmin(chatId: number | string, userId: number): Promise<boolean> {
+async function checkAdmin(chatId: number | string, userId: number, chatType: string): Promise<boolean> {
+    // Chat rieng: chi owner
+    if (chatType === 'private') {
+        return userId === OWNER_ID;
+    }
+    // Group: check admin cua group
     try {
         const res = await fetch(
             'https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/getChatAdministrators',
@@ -144,7 +150,7 @@ export default async function handler(req: any, res: any) {
         const text = message.text.trim();
         const supabase = getSupabase();
         const userId = message.from?.id;
-        const isAdmin = userId ? await isGroupAdmin(chatId, userId) : false;
+        const isAdmin = userId ? await checkAdmin(chatId, userId, message.chat.type) : false;
 
         // === LENH /themdon (admin them don nhanh, khong can reply) ===
         // Cu phap: /themdon email@gmail.com goi 1 thang thuytien
