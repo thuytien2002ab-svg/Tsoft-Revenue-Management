@@ -276,7 +276,8 @@ export const updateDebtStatus = async (debtId: string, status: DebtStatus): Prom
 
   const ordersToUpdate = (orders as Order[]).filter(order => {
     const orderDate = format(startOfDay(parseISO(order.sold_at)), 'yyyy-MM-dd');
-    return orderDate === date;
+    // Không đổi status của đơn hoàn tiền — chỉ cập nhật đơn Unpaid/Paid thông thường
+    return orderDate === date && order.paymentStatus !== PaymentStatus.Refunded;
   });
 
   if (ordersToUpdate.length > 0) {
