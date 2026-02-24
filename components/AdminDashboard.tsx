@@ -32,6 +32,13 @@ const calculateGrossRevenue = (order: Order): number => {
     return order.price;
 };
 
+// Đơn quá hạn: Unpaid + quá 24h kể từ ngày tạo
+const isOverdue = (order: Order): boolean => {
+    if (order.paymentStatus !== PaymentStatus.Unpaid) return false;
+    const hoursSince = (Date.now() - new Date(order.sold_at).getTime()) / 36e5;
+    return hoursSince > 24;
+};
+
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     // Main data state
     const [orders, setOrders] = useState<Order[]>([]);
@@ -507,6 +514,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
         }, 0);
         // Hoa hồng thực tế = Gross - Net (bao gồm cả chiết khấu mặc định + giảm thêm theo đơn)
         const filteredCommission = filteredGrossRevenue - filteredNetRevenue;
+        const overdueOrders = filteredOrders.filter(isOverdue);
 
         return (
             <div className="p-6 overflow-x-auto bg-slate-800 rounded-lg shadow-lg">
@@ -575,6 +583,15 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                         <p className="text-sm text-slate-400 uppercase tracking-wider group-hover:text-red-300 transition-colors">Công nợ <span className="underline ml-1 text-xs opacity-70">(Nhấn để xem)</span></p>
                         <p className="text-2xl font-bold text-red-400 group-hover:scale-105 transition-transform origin-left">{formatCurrency(filteredDebt)}</p>
                     </div>
+                    {overdueOrders.length > 0 && (
+                        <div className="flex items-center gap-3 ml-auto px-4 py-2 bg-red-900/50 border border-red-500/60 rounded-lg animate-pulse">
+                            <span className="text-2xl">🚨</span>
+                            <div>
+                                <p className="text-sm font-bold text-red-300 uppercase tracking-wider">Quá hạn 24h</p>
+                                <p className="text-2xl font-extrabold text-red-400">{overdueOrders.length} đơn</p>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <table className="w-full text-left table-auto">
@@ -598,10 +615,19 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                             const agent = agents.find(a => a.id === order.agentId);
                             const discount = agent?.discountPercentage || 0;
                             const globalIndex = (currentOrderPage - 1) * ITEMS_PER_PAGE + index + 1;
+                            const overdue = isOverdue(order);
                             return (
-                                <tr key={order.id} className="border-b border-slate-700 hover:bg-slate-700/50">
+                                <tr key={order.id} className={`border-b transition-colors ${overdue
+                                        ? 'border-red-800 bg-red-900/20 hover:bg-red-900/30'
+                                        : 'border-slate-700 hover:bg-slate-700/50'
+                                    }`}>
                                     <td className="p-3 text-sm">{globalIndex}</td>
-                                    <td className="p-3"><p className="font-bold text-sm text-slate-300">{order.account_email}</p></td>
+                                    <td className="p-3">
+                                        <div className="flex items-center gap-2">
+                                            {overdue && <span title="Quá hạn 24h!" className="text-red-400 animate-pulse">🚨</span>}
+                                            <p className="font-bold text-sm text-slate-300">{order.account_email}</p>
+                                        </div>
+                                    </td>
                                     <td className="p-3 text-sm">{getPackageName(order.packageId)}</td>
                                     <td className="p-3 text-sm font-bold text-slate-300">
                                         {order.paymentStatus === PaymentStatus.Refunded ? (

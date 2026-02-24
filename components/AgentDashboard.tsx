@@ -33,6 +33,12 @@ const calculateAgentCommission = (order: Order, agentDiscountPct: number): numbe
   return Math.max(0, calculateGrossRevenue(order) - calculateNetRevenue(order, agentDiscountPct));
 };
 
+// Đơn quá hạn: Unpaid + quá 24h
+const isOverdue = (order: Order): boolean => {
+  if (order.paymentStatus !== PaymentStatus.Unpaid) return false;
+  return (Date.now() - new Date(order.sold_at).getTime()) / 36e5 > 24;
+};
+
 const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [packages, setPackages] = useState<Package[]>([]);
@@ -262,6 +268,21 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
       )}
 
 
+      {/* Cảnh báo đơn quá hạn 24h */}
+      {(() => {
+        const overdueCount = orders.filter(isOverdue).length;
+        if (overdueCount === 0) return null;
+        return (
+          <div className="mb-6 p-4 rounded-xl bg-gradient-to-r from-red-800/60 to-red-900/40 border border-red-500/70 flex items-center gap-4 animate-pulse shadow-[0_0_20px_rgba(239,68,68,0.3)]">
+            <span className="text-4xl">🚨</span>
+            <div className="flex-1">
+              <h4 className="text-xl font-extrabold text-red-300">Có {overdueCount} đơn hàng chưa thanh toán quá 24 giờ!</h4>
+              <p className="text-red-400 text-sm mt-1">Vui lòng xử lý ngay — tài khoản khách có thể bị huỷ active.</p>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Filters and Search Bar Container */}
       <div className="p-6 mb-6 rounded-lg bg-slate-800 shadow-lg flex flex-col gap-4">
         <h3 className="text-xl font-semibold text-slate-200">Tìm kiếm & Bộ lọc nâng cao</h3>
@@ -330,10 +351,19 @@ const AgentDashboard: React.FC<AgentDashboardProps> = ({ user, onLogout }) => {
           </thead>
           <tbody>
             {paginatedOrders.map((order, index) => {
+              const overdue = isOverdue(order);
               return (
-                <tr key={order.id} className="border-b border-slate-700 hover:bg-slate-700/50">
+                <tr key={order.id} className={`border-b transition-colors ${overdue
+                  ? 'border-red-800 bg-red-900/20 hover:bg-red-900/30'
+                  : 'border-slate-700 hover:bg-slate-700/50'
+                  }`}>
                   <td className="p-3 text-sm">{(currentPage - 1) * itemsPerPage + index + 1}</td>
-                  <td className="p-3"><p className="font-bold text-sm text-slate-300">{order.account_email}</p></td>
+                  <td className="p-3">
+                    <div className="flex items-center gap-2">
+                      {overdue && <span title="Quá hạn 24h!" className="text-red-400">🚨</span>}
+                      <p className="font-bold text-sm text-slate-300">{order.account_email}</p>
+                    </div>
+                  </td>
                   <td className="p-3 text-sm">{getPackageName(order.packageId)}</td>
                   <td className="p-3 text-sm font-bold text-slate-300">
                     {order.paymentStatus === PaymentStatus.Refunded ? (
