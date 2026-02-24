@@ -284,24 +284,18 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     }, [orders, agents]);
 
     const revenueRecords = useMemo(() => {
-        const validOrders = orders.filter(o => o.paymentStatus === PaymentStatus.Paid || o.actual_revenue != null);
+        // Kỷ lục tính theo Gross (doanh số bán cho khách, chưa trừ hoa hồng), loại đơn hoàn
+        const validOrders = orders.filter(o => o.paymentStatus !== PaymentStatus.Refunded);
 
         const dailyRevenue: Record<string, number> = {};
         const monthlyRevenue: Record<string, number> = {};
 
         validOrders.forEach(order => {
-            let actualRevenue = order.actual_revenue;
-            if (actualRevenue == null) {
-                const agent = agents.find(a => a.id === order.agentId);
-                const discount = agent?.discountPercentage || 0;
-                actualRevenue = order.price * (1 - discount / 100);
-            }
-
             const dayKey = format(parseISO(order.sold_at), 'yyyy-MM-dd');
             const monthKey = format(parseISO(order.sold_at), 'MM/yyyy');
 
-            dailyRevenue[dayKey] = (dailyRevenue[dayKey] || 0) + actualRevenue;
-            monthlyRevenue[monthKey] = (monthlyRevenue[monthKey] || 0) + actualRevenue;
+            dailyRevenue[dayKey] = (dailyRevenue[dayKey] || 0) + order.price;
+            monthlyRevenue[monthKey] = (monthlyRevenue[monthKey] || 0) + order.price;
         });
 
         let bestDay = { date: '', revenue: 0 };
@@ -319,7 +313,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
         });
 
         return { bestDay, bestMonth };
-    }, [orders, agents]);
+    }, [orders]);
 
     const adminUnpaidStats = useMemo(() => {
         const unpaidOrders = orders.filter(o => o.paymentStatus === PaymentStatus.Unpaid);
