@@ -1,9 +1,14 @@
-
 {
   "rewrites": [
     {
       "source": "/((?!api/|_next/|.*\\..*).*)",
       "destination": "/index.html"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/daily-report",
+      "schedule": "59 16 * * *"
     }
   ]
 }
