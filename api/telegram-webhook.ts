@@ -54,6 +54,25 @@ function getSupabase() {
     );
 }
 
+async function checkDuplicateEmail(supabase: any, email: string): Promise<boolean> {
+    const now = new Date();
+    const vnOffset = 7 * 60 * 60 * 1000;
+    const vietnamNow = new Date(now.getTime() + vnOffset);
+    const todayStr = vietnamNow.toISOString().split('T')[0];
+    const startUTC = new Date(new Date(todayStr + 'T00:00:00+07:00').getTime()).toISOString();
+    const endUTC = new Date(new Date(todayStr + 'T23:59:59+07:00').getTime()).toISOString();
+
+    const { data } = await supabase
+        .from('orders')
+        .select('id')
+        .ilike('account_email', email)
+        .gte('sold_at', startUTC)
+        .lte('sold_at', endUTC)
+        .limit(1);
+
+    return (data && data.length > 0);
+}
+
 async function sendTelegram(chatId: number | string, text: string) {
     await fetch('https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/sendMessage', {
         method: 'POST',
@@ -182,6 +201,13 @@ export default async function handler(req: any, res: any) {
                 return res.status(200).json({ ok: true });
             }
 
+            // Check trung email cung ngay
+            const isDuplicate = await checkDuplicateEmail(supabase, order.email);
+            if (isDuplicate) {
+                await sendTelegram(chatId, '\u26a0\ufe0f Email ' + order.email + ' \u0111\u00e3 c\u00f3 \u0111\u01a1n h\u00f4m nay r\u1ed3i! Kh\u00f4ng th\u1ec3 th\u00eam m\u1edbi.');
+                return res.status(200).json({ ok: true });
+            }
+
             const discount = agent.discountPercentage || 0;
             const actualRevenue = Math.round(order.totalPrice * (1 - discount / 100));
 
@@ -243,6 +269,13 @@ export default async function handler(req: any, res: any) {
 
             if (agentErr || !agent) {
                 await sendTelegram(chatId, '\u274c Kh\u00f4ng t\u00ecm th\u1ea5y \u0111\u1ea1i l\u00fd "' + username + '". Ki\u1ec3m tra l\u1ea1i username.');
+                return res.status(200).json({ ok: true });
+            }
+
+            // Check trung email cung ngay
+            const isDup = await checkDuplicateEmail(supabase, order.email);
+            if (isDup) {
+                await sendTelegram(chatId, '\u26a0\ufe0f Email ' + order.email + ' \u0111\u00e3 c\u00f3 \u0111\u01a1n h\u00f4m nay r\u1ed3i! Kh\u00f4ng th\u1ec3 th\u00eam m\u1edbi.');
                 return res.status(200).json({ ok: true });
             }
 
