@@ -399,19 +399,21 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
     };
 
     const handleAddOrder = async (newOrderData: Omit<Order, 'id'>) => {
-        // Check for duplicate email on the same day
+        // Check for duplicate: same email + same package on the same day
         const today = new Date();
         const isDuplicate = orders.some(order => {
             if (!order.account_email) return false;
             const orderDate = parseISO(order.sold_at);
             return order.account_email.toLowerCase() === newOrderData.account_email?.toLowerCase() &&
+                order.packageId === newOrderData.packageId &&
                 orderDate.getDate() === today.getDate() &&
                 orderDate.getMonth() === today.getMonth() &&
                 orderDate.getFullYear() === today.getFullYear();
         });
 
         if (isDuplicate) {
-            alert('Đơn hàng với email này đã tồn tại trong ngày hôm nay. Không thể thêm mới.');
+            const pkgName = getPackageName(newOrderData.packageId);
+            alert(`Đơn hàng với email "${newOrderData.account_email}" và gói "${pkgName}" đã tồn tại trong ngày hôm nay. Không thể thêm trùng.`);
             return;
         }
 
@@ -618,8 +620,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
                             const overdue = isOverdue(order);
                             return (
                                 <tr key={order.id} className={`border-b transition-colors ${overdue
-                                        ? 'border-red-800 bg-red-900/20 hover:bg-red-900/30'
-                                        : 'border-slate-700 hover:bg-slate-700/50'
+                                    ? 'border-red-800 bg-red-900/20 hover:bg-red-900/30'
+                                    : 'border-slate-700 hover:bg-slate-700/50'
                                     }`}>
                                     <td className="p-3 text-sm">{globalIndex}</td>
                                     <td className="p-3">
