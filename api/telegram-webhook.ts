@@ -283,8 +283,34 @@ export default async function handler(req: any, res: any) {
 }
 
 // =============================================
-// AUTO-DETECT ORDERS FROM GROUP
+// GENDER DETECTION FROM VIETNAMESE NAME
 // =============================================
+
+function getGenderTitle(from: any): { title: string; lastName: string } {
+    const firstName = from?.first_name || '';
+    const lastName = from?.last_name || '';
+    const fullName = (firstName + ' ' + lastName).trim();
+    const lowerFull = fullName.toLowerCase();
+
+    // Ten dem chi ra nu
+    const femalePatterns = ['thi ', 'th\u1ecb ', ' nu ', ' n\u1eef ', ' tuyen', ' tuy\u1ebfn', ' lan', ' linh', ' hoa', ' huong', ' h\u01b0\u01a1ng', ' hang', ' h\u1eb1ng', ' nhi', ' mai', ' van anh', ' v\u00e2n anh', ' bich', ' b\u00edch'];
+    // Ten dem chi ra nam
+    const malePatterns = ['van ', 'v\u0103n ', ' hung', ' h\u00f9ng', ' cuong', ' c\u01b0\u1eddng', ' duc', ' \u0111\u1ee9c', ' tuan', ' tu\u1ea5n', ' minh', ' long', ' phuc', ' ph\u00fac', ' khoa', ' hieu', ' hi\u1ebfu', ' dung nam'];
+
+    const isFemale = femalePatterns.some(p => lowerFull.includes(p));
+    const isMale = !isFemale && malePatterns.some(p => lowerFull.includes(p));
+
+    // Lay ten goi (ten cuoi cung hoac first_name neu k co last_name)
+    // Vi nguoi Viet: ho ten = [Ho] [Ten dem] [Ten]. First name = Ten, Last name = Ho
+    // Khi display tren Telegram: first_name thuong la Ten rieng
+    const displayName = firstName || fullName;
+
+    if (isFemale) return { title: 'Ch\u1ecb', lastName: displayName };
+    if (isMale) return { title: 'Anh', lastName: displayName };
+
+    // Không xác định được → giữ "Anh/Chị" trung tính
+    return { title: 'Anh/Ch\u1ecb', lastName: '' };
+}
 
 async function handleGroupMessage(message: any) {
     const text = message.text || '';
@@ -321,19 +347,22 @@ async function handleGroupMessage(message: any) {
     if (error || !pending) return;
 
     // --- Reply trong group ---
-    const senderName = message.from?.first_name || 'b\u1ea1n';
+    const genderInfo = getGenderTitle(message.from);
+    const salutation = genderInfo.title
+        ? genderInfo.title + ' ' + genderInfo.lastName
+        : genderInfo.lastName;
 
     let groupReply: string;
     if (parsed && parsed.packageId) {
         groupReply = [
-            'D\u1ea1 \u0111\u01a1n h\u00e0ng c\u1ee7a anh/ch\u1ecb ' + senderName + ' \u0111\u00e3 \u0111\u01b0\u1ee3c em g\u1eedi t\u1edbi s\u1ebfp Long duy\u1ec7t. Xin vui l\u00f2ng ch\u1edd trong \u00edt ph\u00fat \u1ea1...',
+            'D\u1ea1 \u0111\u01a1n h\u00e0ng c\u1ee7a ' + salutation + ' \u0111\u00e3 \u0111\u01b0\u1ee3c em g\u1eedi t\u1edbi s\u1ebfp Long duy\u1ec7t. Xin vui l\u00f2ng ch\u1edd trong \u00edt ph\u00fat \u1ea1...',
             '',
             '\ud83d\udce7 Email: ' + email,
             '\ud83d\udce6 G\u00f3i: ' + parsed.packageName + (parsed.vipName ? ' + ' + parsed.vipName.toUpperCase() : ''),
             '\ud83d\udcb0 Gi\u00e1: ' + fmt(parsed.totalPrice) + ' VN\u0110',
         ].join('\n');
     } else {
-        groupReply = 'D\u1ea1 \u0111\u01a1n h\u00e0ng c\u1ee7a anh/ch\u1ecb ' + senderName + ' \u0111\u00e3 \u0111\u01b0\u1ee3c em g\u1eedi t\u1edbi s\u1ebfp Long duy\u1ec7t. Xin vui l\u00f2ng ch\u1edd trong \u00edt ph\u00fat \u1ea1...';
+        groupReply = 'D\u1ea1 \u0111\u01a1n h\u00e0ng c\u1ee7a ' + salutation + ' \u0111\u00e3 \u0111\u01b0\u1ee3c em g\u1eedi t\u1edbi s\u1ebfp Long duy\u1ec7t. Xin vui l\u00f2ng ch\u1edd trong \u00edt ph\u00fat \u1ea1...';
     }
 
     await sendTelegram(message.chat.id, groupReply, { reply_to_message_id: message.message_id });
