@@ -348,12 +348,86 @@ function getGenderTitle(from: any): { title: string; lastName: string } {
     return { title: 'Anh/Ch\u1ecb', lastName: '' };
 }
 
+// =========================================================
+// XU LY WAITING ORDERS DA QUA 60 GIAY
+// =========================================================
+async function processExpiredWaitingOrders(supabase: any, groupChatId: number) {
+    const sixtySecsAgo = new Date(Date.now() - 60 * 1000).toISOString();
+
+    const { data: waitingOrders } = await supabase
+        .from('pending_orders')
+        .select('*')
+        .eq('group_chat_id', groupChatId)
+        .eq('status', 'waiting')
+        .lt('created_at', sixtySecsAgo);
+
+    if (!waitingOrders || waitingOrders.length === 0) return;
+
+    for (const pending of waitingOrders) {
+        // Doi sang pending truoc
+        await supabase.from('pending_orders').update({ status: 'pending' }).eq('id', pending.id);
+
+        // Build group reply tu data da luu
+        const fakeFrom = { first_name: pending.agent_telegram_name, last_name: '' };
+        const genderInfo = getGenderTitle(fakeFrom);
+        const salutation = genderInfo.title
+            ? genderInfo.title + (genderInfo.lastName ? ' ' + genderInfo.lastName : '')
+            : genderInfo.lastName || 'Anh/Chị';
+
+        const groupReply = [
+            'Dạ đơn hàng của ' + salutation + ' đã được em gửi tới sếp Long duyệt. Xin vui lòng chờ trong ít phút ạ...',
+            '',
+            '📧 Email: ' + pending.email,
+            '📦 Gói: ' + pending.package_name + (pending.vip_name ? ' + ' + pending.vip_name : ''),
+            '💰 Giá: ' + fmt(pending.total_price) + ' VNĐ',
+        ].join('\n');
+
+        await sendTelegram(pending.group_chat_id, groupReply, { reply_to_message_id: pending.group_message_id });
+
+        // Kiem tra linked agent
+        let linkedAgent: any = null;
+        if (pending.sender_user_id) {
+            const { data: agentByTg } = await supabase
+                .from('users').select('*')
+                .eq('telegram_user_id', pending.sender_user_id)
+                .eq('role', 'AGENT')
+                .maybeSingle();
+            linkedAgent = agentByTg || null;
+        }
+
+        let dmText = buildPendingMessage(pending);
+        let keyboard: any;
+        if (linkedAgent) {
+            dmText += '\n\n\ud83e\udd16 \u0110\u1ea1i l\u00fd t\u1ef1 \u0111\u1ed9ng: ' + linkedAgent.name + ' (CK ' + (linkedAgent.discountPercentage || 0) + '%)';
+            keyboard = {
+                inline_keyboard: [
+                    [{ text: '\u2705 Xác nhận cho ' + linkedAgent.name, callback_data: 'agent:' + pending.id + ':' + linkedAgent.id }],
+                    [{ text: '\u270f\ufe0f Chỉnh sửa đơn', callback_data: 'edit:' + pending.id }],
+                    [{ text: '\ud83d\udd04 Đổi đại lý khác', callback_data: 'confirm:' + pending.id }],
+                    [{ text: '\u274c Hủy', callback_data: 'cancel:' + pending.id }],
+                ],
+            };
+        } else {
+            keyboard = buildMainKeyboard(pending.id);
+        }
+
+        try {
+            await sendTelegramInline(OWNER_ID, dmText, keyboard);
+        } catch (e) {
+            console.error('Failed to DM owner:', e);
+        }
+    }
+}
+
 async function handleGroupMessage(message: any) {
     const text = message.text || '';
     const supabase = getSupabase();
     const senderId = message.from?.id;
     const groupChatId = message.chat.id;
     const lower = text.toLowerCase();
+
+    // === XU LY WAITING ORDERS CU TRUOC (moi tin nhan moi deu trigger nay) ===
+    await processExpiredWaitingOrders(supabase, groupChatId);
 
     // === BLACKLIST: Bo qua tin nhan test / dung thu ===
     const SKIP_KEYWORDS = [
@@ -374,9 +448,8 @@ async function handleGroupMessage(message: any) {
     // TRUONG HOP 1: Co ca email(s) + goi trong cung 1 tin
     // =========================================================
     if (hasEmail && hasPackage) {
-        // Bulk: tao N don cho N email
         for (const email of allEmails) {
-            await createPendingAndNotify(supabase, message, email, parsed!);
+            await queuePendingOrder(supabase, message, email, parsed!);
         }
         return;
     }
@@ -385,7 +458,6 @@ async function handleGroupMessage(message: any) {
     // TRUONG HOP 2: Chi co email(s), chua co goi → luu partial(s)
     // =========================================================
     if (hasEmail && !hasPackage) {
-        // Xoa tat ca partial cu cua cung sender trong group nay
         await supabase
             .from('pending_orders')
             .delete()
@@ -393,16 +465,11 @@ async function handleGroupMessage(message: any) {
             .eq('group_chat_id', groupChatId)
             .eq('status', 'email_only');
 
-        // Luu 1 partial cho moi email (bulk)
         const agentName = (message.from?.first_name || '') + (message.from?.last_name ? ' ' + message.from.last_name : '');
         const partialRows = allEmails.map(email => ({
             email,
-            package_id: 0,
-            package_name: '',
-            total_price: 0,
-            vip_name: '',
-            vip_price: 0,
-            notes: '',
+            package_id: 0, package_name: '', total_price: 0,
+            vip_name: '', vip_price: 0, notes: '',
             group_chat_id: groupChatId,
             group_message_id: message.message_id,
             agent_telegram_name: agentName,
@@ -410,18 +477,15 @@ async function handleGroupMessage(message: any) {
             status: 'email_only',
         }));
         await supabase.from('pending_orders').insert(partialRows);
-        // Khong reply group, cho tin tiep theo
         return;
     }
 
     // =========================================================
-    // TRUONG HOP 3: Chi co goi, khong co email → tim partial(s) cua cung sender
+    // TRUONG HOP 3: Chi co goi → tim partial(s) cua cung sender
     // =========================================================
     if (!hasEmail && hasPackage) {
-        // Tim TẤT CA partial email tu cung sender trong 1 phut qua
         const { data: partials } = await supabase
-            .from('pending_orders')
-            .select('*')
+            .from('pending_orders').select('*')
             .eq('sender_user_id', senderId)
             .eq('group_chat_id', groupChatId)
             .eq('status', 'email_only')
@@ -429,45 +493,26 @@ async function handleGroupMessage(message: any) {
             .order('created_at', { ascending: true });
 
         if (partials && partials.length > 0) {
-            // Danh dau tat ca partial la da xu ly
             const partialIds = partials.map((p: any) => p.id);
-            await supabase
-                .from('pending_orders')
-                .update({ status: 'merged_done' })
-                .in('id', partialIds);
+            await supabase.from('pending_orders').update({ status: 'merged_done' }).in('id', partialIds);
 
-            // Tao 1 don cho moi partial email
             for (const partial of partials) {
-                await createPendingAndNotify(supabase, message, partial.email, parsed!, partial.group_message_id);
+                await queuePendingOrder(supabase, message, partial.email, parsed!, partial.group_message_id);
             }
         }
-        // Neu khong tim thay partial → bo qua
         return;
     }
 }
 
-async function createPendingAndNotify(
+async function queuePendingOrder(
     supabase: any,
     message: any,
     email: string,
     parsed: ReturnType<typeof parseOrder>,
     originalMessageId?: number
 ) {
-    const senderId = message.from?.id;
-
-    // === Kiem tra xem sender co phai dai ly da duoc gan khong ===
-    let linkedAgent: any = null;
-    if (senderId) {
-        const { data: agentByTg } = await supabase
-            .from('users')
-            .select('*')
-            .eq('telegram_user_id', senderId)
-            .eq('role', 'AGENT')
-            .maybeSingle();
-        linkedAgent = agentByTg || null;
-    }
-
-    const pendingData: any = {
+    const agentName = (message.from?.first_name || '') + (message.from?.last_name ? ' ' + message.from.last_name : '');
+    await supabase.from('pending_orders').insert({
         email,
         package_id: parsed!.packageId,
         package_name: parsed!.packageName,
@@ -477,60 +522,11 @@ async function createPendingAndNotify(
         notes: parsed!.notes,
         group_chat_id: message.chat.id,
         group_message_id: originalMessageId || message.message_id,
-        agent_telegram_name: (message.from?.first_name || '') + (message.from?.last_name ? ' ' + message.from.last_name : ''),
-        sender_user_id: senderId,
-        status: 'pending',
-    };
-
-    const { data: pending, error } = await supabase
-        .from('pending_orders')
-        .insert(pendingData)
-        .select()
-        .single();
-
-    if (error || !pending) return;
-
-    // --- Reply trong group ---
-    const genderInfo = getGenderTitle(message.from);
-    const salutation = genderInfo.title
-        ? genderInfo.title + (genderInfo.lastName ? ' ' + genderInfo.lastName : '')
-        : genderInfo.lastName || 'Anh/Chị';
-
-    const groupReply = [
-        'Dạ đơn hàng của ' + salutation + ' đã được em gửi tới sếp Long duyệt. Xin vui lòng chờ trong ít phút ạ...',
-        '',
-        '📧 Email: ' + email,
-        '📦 Gói: ' + parsed!.packageName + (parsed!.vipName ? ' + ' + parsed!.vipName : ''),
-        '💰 Giá: ' + fmt(parsed!.totalPrice) + ' VNĐ',
-    ].join('\n');
-
-    await sendTelegram(message.chat.id, groupReply, { reply_to_message_id: pendingData.group_message_id });
-
-    // --- DM cho Owner ---
-    try {
-        let dmText = buildPendingMessage(pending);
-        let keyboard: any;
-
-        if (linkedAgent) {
-            // Da biet dai ly → hien keyboard xac nhan nhanh
-            dmText += '\n\n\ud83e\udd16 \u0110\u1ea1i l\u00fd t\u1ef1 \u0111\u1ed9ng: ' + linkedAgent.name + ' (CK ' + (linkedAgent.discountPercentage || 0) + '%)';
-            keyboard = {
-                inline_keyboard: [
-                    [{ text: '✅ Xác nhận cho ' + linkedAgent.name, callback_data: 'agent:' + pending.id + ':' + linkedAgent.id }],
-                    [{ text: '✏️ Chỉnh sửa đơn', callback_data: 'edit:' + pending.id }],
-                    [{ text: '🔄 Đổi đại lý khác', callback_data: 'confirm:' + pending.id }],
-                    [{ text: '❌ Hủy', callback_data: 'cancel:' + pending.id }],
-                ],
-            };
-        } else {
-            // Chua biet dai ly → hien keyboard binh thuong
-            keyboard = buildMainKeyboard(pending.id);
-        }
-
-        await sendTelegramInline(OWNER_ID, dmText, keyboard);
-    } catch (e) {
-        console.error('Failed to DM owner:', e);
-    }
+        agent_telegram_name: agentName,
+        sender_user_id: message.from?.id,
+        status: 'waiting',  // Luu tam, chua gui gi ca
+    });
+    // Khong reply, khong DM → doi processExpiredWaitingOrders xu ly sau 60 giay
 }
 
 // =============================================
