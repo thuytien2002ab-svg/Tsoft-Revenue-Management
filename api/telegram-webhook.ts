@@ -391,13 +391,7 @@ async function processExpiredWaitingOrders(supabase: any, groupChatId: number) {
 
 
 
-        const groupReply = [
-            'D\u1ea1 \u0111\u01a1n h\u00e0ng c\u1ee7a ' + salutation + ' \u0111\u00e3 \u0111\u01b0\u1ee3c em g\u1eedi t\u1edbi s\u1ebfp Long duy\u1ec7t. Xin vui l\u00f2ng ch\u1edd trong \u00edt ph\u00fat \u1ea1...',
-            '',
-            '\ud83d\udce7 Email: ' + pending.email,
-            '\ud83d\udce6 G\u00f3i: ' + pending.package_name + (pending.vip_name ? ' + ' + pending.vip_name : ''),
-            '\ud83d\udcb0 Gi\u00e1: ' + fmt(pending.total_price) + ' VN\u0110',
-        ].join('\n');
+        const groupReply = 'Em ti\u1ebfp nh\u1eadn v\u00e0 g\u1eedi \u0111\u01a1n c\u1ee7a ' + salutation + ' sang cho s\u1ebfp Long r\u1ed3i \u1ea1 ! ' + salutation + ' ch\u1edd x\u00edu nh\u00e9 ...';
 
         await sendTelegram(pending.group_chat_id, groupReply, { reply_to_message_id: pending.group_message_id });
 
