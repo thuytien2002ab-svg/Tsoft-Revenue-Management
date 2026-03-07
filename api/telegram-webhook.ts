@@ -349,73 +349,85 @@ function getGenderTitle(from: any): { title: string; lastName: string } {
 }
 
 // =========================================================
-// XU LY WAITING ORDERS DA QUA 60 GIAY
+// TAO DON VA THONG BAO NGAY (immediate)
 // =========================================================
-async function processExpiredWaitingOrders(supabase: any, groupChatId: number) {
-    const sixtySecsAgo = new Date(Date.now() - 60 * 1000).toISOString();
+async function createAndNotify(
+    supabase: any,
+    message: any,
+    email: string,
+    parsed: ReturnType<typeof parseOrder>,
+    originalMessageId?: number
+) {
+    const senderId = message.from?.id;
+    const agentName = (message.from?.first_name || '') + (message.from?.last_name ? ' ' + message.from.last_name : '');
 
-    const { data: waitingOrders } = await supabase
+    // Kiem tra linked agent va gender
+    let linkedAgent: any = null;
+    if (senderId) {
+        const { data: mapping } = await supabase
+            .from('agent_telegram_mappings')
+            .select('agent_id, users(*)')
+            .eq('telegram_user_id', senderId)
+            .maybeSingle();
+        linkedAgent = mapping?.users || null;
+    }
+
+    // Build salutation
+    let salutation: string;
+    if (linkedAgent && linkedAgent.gender) {
+        const firstName = (linkedAgent.name || '').split(' ').pop() || linkedAgent.name;
+        salutation = (linkedAgent.gender === 'female' ? 'Ch\u1ecb ' : 'Anh ') + firstName;
+    } else {
+        const fakeFrom = { first_name: agentName, last_name: '' };
+        const gi = getGenderTitle(fakeFrom);
+        salutation = gi.title ? gi.title + (gi.lastName ? ' ' + gi.lastName : '') : 'Anh/Ch\u1ecb';
+    }
+
+    // Luu vao DB
+    const { data: pending, error } = await supabase
         .from('pending_orders')
-        .select('*')
-        .eq('group_chat_id', groupChatId)
-        .eq('status', 'waiting')
-        .lt('created_at', sixtySecsAgo);
+        .insert({
+            email,
+            package_id: parsed!.packageId,
+            package_name: parsed!.packageName,
+            total_price: parsed!.totalPrice,
+            vip_name: parsed!.vipName,
+            vip_price: parsed!.vipPrice,
+            notes: parsed!.notes,
+            group_chat_id: message.chat.id,
+            group_message_id: originalMessageId || message.message_id,
+            agent_telegram_name: agentName,
+            sender_user_id: senderId,
+            status: 'pending',
+        })
+        .select().single();
 
-    if (!waitingOrders || waitingOrders.length === 0) return;
+    if (error || !pending) return;
 
-    for (const pending of waitingOrders) {
-        // Doi sang pending truoc
-        await supabase.from('pending_orders').update({ status: 'pending' }).eq('id', pending.id);
+    // Reply ngay vao group
+    const groupReply = 'Em ti\u1ebfp nh\u1eadn v\u00e0 g\u1eedi \u0111\u01a1n c\u1ee7a ' + salutation + ' sang cho s\u1ebfp Long r\u1ed3i \u1ea1 ! ' + salutation + ' ch\u1edd x\u00edu nh\u00e9 ...';
+    await sendTelegram(message.chat.id, groupReply, { reply_to_message_id: originalMessageId || message.message_id });
 
-        // Kiem tra linked agent TRUOC (can cho salutation)
-        let linkedAgent: any = null;
-        if (pending.sender_user_id) {
-            const { data: mapping } = await supabase
-                .from('agent_telegram_mappings')
-                .select('agent_id, users(*)')
-                .eq('telegram_user_id', pending.sender_user_id)
-                .maybeSingle();
-            linkedAgent = mapping?.users || null;
-        }
-
-        // Build salutation: uu tien gender da luu trong DB
-        let salutation: string;
-        if (linkedAgent && linkedAgent.gender) {
-            const agentFirstName = (linkedAgent.name || '').split(' ').pop() || linkedAgent.name;
-            salutation = (linkedAgent.gender === 'female' ? 'Ch\u1ecb ' : 'Anh ') + agentFirstName;
-        } else {
-            const fakeFrom = { first_name: pending.agent_telegram_name, last_name: '' };
-            const gi = getGenderTitle(fakeFrom);
-            salutation = gi.title ? gi.title + (gi.lastName ? ' ' + gi.lastName : '') : 'Anh/Ch\u1ecb';
-        }
-
-
-
-        const groupReply = 'Em ti\u1ebfp nh\u1eadn v\u00e0 g\u1eedi \u0111\u01a1n c\u1ee7a ' + salutation + ' sang cho s\u1ebfp Long r\u1ed3i \u1ea1 ! ' + salutation + ' ch\u1edd x\u00edu nh\u00e9 ...';
-
-        await sendTelegram(pending.group_chat_id, groupReply, { reply_to_message_id: pending.group_message_id });
-
-        let dmText = buildPendingMessage(pending);
-        let keyboard: any;
-        if (linkedAgent) {
-            dmText += '\n\n\ud83e\udd16 \u0110\u1ea1i l\u00fd t\u1ef1 \u0111\u1ed9ng: ' + linkedAgent.name + ' (CK ' + (linkedAgent.discountPercentage || 0) + '%)';
-            keyboard = {
-                inline_keyboard: [
-                    [{ text: '\u2705 Xác nhận cho ' + linkedAgent.name, callback_data: 'agent:' + pending.id + ':' + linkedAgent.id }],
-                    [{ text: '\u270f\ufe0f Chỉnh sửa đơn', callback_data: 'edit:' + pending.id }],
-                    [{ text: '\ud83d\udd04 Đổi đại lý khác', callback_data: 'confirm:' + pending.id }],
-                    [{ text: '\u274c Hủy', callback_data: 'cancel:' + pending.id }],
-                ],
-            };
-        } else {
-            keyboard = buildMainKeyboard(pending.id);
-        }
-
-        try {
-            await sendTelegramInline(OWNER_ID, dmText, keyboard);
-        } catch (e) {
-            console.error('Failed to DM owner:', e);
-        }
+    // DM cho Owner ngay
+    let dmText = buildPendingMessage(pending);
+    let keyboard: any;
+    if (linkedAgent) {
+        dmText += '\n\n\ud83e\udd16 \u0110\u1ea1i l\u00fd t\u1ef1 \u0111\u1ed9ng: ' + linkedAgent.name + ' (CK ' + (linkedAgent.discountPercentage || 0) + '%)';
+        keyboard = {
+            inline_keyboard: [
+                [{ text: '\u2705 X\u00e1c nh\u1eadn cho ' + linkedAgent.name, callback_data: 'agent:' + pending.id + ':' + linkedAgent.id }],
+                [{ text: '\u270f\ufe0f Ch\u1ec9nh s\u1eeda \u0111\u01a1n', callback_data: 'edit:' + pending.id }],
+                [{ text: '\ud83d\udd04 \u0110\u1ed5i \u0111\u1ea1i l\u00fd kh\u00e1c', callback_data: 'confirm:' + pending.id }],
+                [{ text: '\u274c H\u1ee7y', callback_data: 'cancel:' + pending.id }],
+            ],
+        };
+    } else {
+        keyboard = buildMainKeyboard(pending.id);
+    }
+    try {
+        await sendTelegramInline(OWNER_ID, dmText, keyboard);
+    } catch (e) {
+        console.error('Failed to DM owner:', e);
     }
 }
 
@@ -425,9 +437,6 @@ async function handleGroupMessage(message: any) {
     const senderId = message.from?.id;
     const groupChatId = message.chat.id;
     const lower = text.toLowerCase();
-
-    // === XU LY WAITING ORDERS CU TRUOC (moi tin nhan moi deu trigger nay) ===
-    await processExpiredWaitingOrders(supabase, groupChatId);
 
     // === BLACKLIST: Bo qua tin nhan test / dung thu ===
     const SKIP_KEYWORDS = [
@@ -449,7 +458,7 @@ async function handleGroupMessage(message: any) {
     // =========================================================
     if (hasEmail && hasPackage) {
         for (const email of allEmails) {
-            await queuePendingOrder(supabase, message, email, parsed!);
+            await createAndNotify(supabase, message, email, parsed!);
         }
         return;
     }
@@ -497,36 +506,11 @@ async function handleGroupMessage(message: any) {
             await supabase.from('pending_orders').update({ status: 'merged_done' }).in('id', partialIds);
 
             for (const partial of partials) {
-                await queuePendingOrder(supabase, message, partial.email, parsed!, partial.group_message_id);
+                await createAndNotify(supabase, message, partial.email, parsed!, partial.group_message_id);
             }
         }
         return;
     }
-}
-
-async function queuePendingOrder(
-    supabase: any,
-    message: any,
-    email: string,
-    parsed: ReturnType<typeof parseOrder>,
-    originalMessageId?: number
-) {
-    const agentName = (message.from?.first_name || '') + (message.from?.last_name ? ' ' + message.from.last_name : '');
-    await supabase.from('pending_orders').insert({
-        email,
-        package_id: parsed!.packageId,
-        package_name: parsed!.packageName,
-        total_price: parsed!.totalPrice,
-        vip_name: parsed!.vipName,
-        vip_price: parsed!.vipPrice,
-        notes: parsed!.notes,
-        group_chat_id: message.chat.id,
-        group_message_id: originalMessageId || message.message_id,
-        agent_telegram_name: agentName,
-        sender_user_id: message.from?.id,
-        status: 'waiting',  // Luu tam, chua gui gi ca
-    });
-    // Khong reply, khong DM → doi processExpiredWaitingOrders xu ly sau 60 giay
 }
 
 // =============================================
