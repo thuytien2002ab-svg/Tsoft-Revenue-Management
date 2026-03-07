@@ -355,6 +355,13 @@ async function handleGroupMessage(message: any) {
     const groupChatId = message.chat.id;
     const lower = text.toLowerCase();
 
+    // === BLACKLIST: Bo qua tin nhan test / dung thu ===
+    const SKIP_KEYWORDS = [
+        'test', 'dùng thử', 'dung thu', 'thử nghiệm', 'thu nghiem',
+        'demo', 'fake', 'giả', 'gia mao', 'thử', 'thu thu',
+    ];
+    if (SKIP_KEYWORDS.some(kw => lower.includes(kw))) return;
+
     // Tim TAT CA emails trong tin nhan (khong chi email dau tien)
     const allEmails: string[] = text.match(/[\w.-]+@[\w.-]+\.\w+/g) || [];
     const hasEmail = allEmails.length > 0;
