@@ -14,6 +14,22 @@ function normalizeVN(text: string): string {
         .trim();
 }
 
+// Phat hien tin nhan co ve la dat goi nhung bot chua hieu
+function hasPackageHint(text: string): boolean {
+    const norm = normalizeVN(text);
+    // Co chu so + thang/nam/year/month, hoac cac tu lien quan den goi
+    return /\d+\s*(thang|nam|month|year|tuan|tuan)/.test(norm) ||
+        /\b(goi|vip|combo|package|plus|pro)\b/.test(norm);
+}
+
+// Phat hien email sai dinh dang (dau phay thay dau cham, thieu TLD...)
+function findMalformedEmails(text: string): string[] {
+    // Bat nhung thu trong giong email nhung co the sai (phay, thieu dot)
+    const candidates = text.match(/[\w.,-]+@[\w.,_-]+/g) || [];
+    const validPattern = /^[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}$/;
+    return candidates.filter((e: string) => !validPattern.test(e));
+}
+
 // === Bang gia goi (ca co dau lan khong dau) ===
 const PACKAGES: Record<string, { id: number; price: number; label: string }> = {
     '1 thang': { id: 1, price: 400000, label: 'G\u00f3i 1 th\u00e1ng' },
@@ -445,6 +461,19 @@ async function handleGroupMessage(message: any) {
     ];
     if (SKIP_KEYWORDS.some(kw => lower.includes(kw))) return;
 
+    // === KIEM TRA EMAIL SAI DINH DANG (dau phay thay dau cham, thieu TLD...) ===
+    const malformedEmails = findMalformedEmails(text);
+    if (malformedEmails.length > 0) {
+        await sendTelegram(
+            groupChatId,
+            '\u274c Phi\u1ebfu h\u00e0ng c\u00f3 email sai \u0111\u1ecbnh d\u1ea1ng:\n' +
+            malformedEmails.map(e => '  • ' + e).join('\n') +
+            '\n\nVui l\u00f2ng ki\u1ec3m tra v\u00e0 g\u1eedi l\u1ea1i nh\u00e9 (c\u00f3 th\u1ec3 nh\u1ea7m d\u1ea5u ph\u1ea9y th\u00e0nh d\u1ea5u ch\u1ea5m \u1ea1)',
+            { reply_to_message_id: message.message_id }
+        );
+        return;
+    }
+
     // Tim TAT CA emails trong tin nhan (khong chi email dau tien)
     const allEmails: string[] = text.match(/[\w.-]+@[\w.-]+\.\w+/g) || [];
     const hasEmail = allEmails.length > 0;
@@ -460,6 +489,27 @@ async function handleGroupMessage(message: any) {
         for (const email of allEmails) {
             await createAndNotify(supabase, message, email, parsed!);
         }
+        return;
+    }
+
+    // =========================================================
+    // TRUONG HOP 1b: Co email + CO HINT GOI nhung bot k hieu → bao owner
+    // =========================================================
+    const norm = normalizeVN(text);
+    if (hasEmail && !hasPackage && hasPackageHint(text)) {
+        const agentName = (message.from?.first_name || '') + (message.from?.last_name ? ' ' + message.from.last_name : '');
+        const dmText = [
+            '\u26a0\ufe0f \u0110\u01a1n c\u1ea7n ki\u1ec3m tra th\u1ee7 c\u00f4ng',
+            '',
+            '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agentName,
+            '\ud83d\udce7 Email(s): ' + allEmails.join(', '),
+            '\ud83d\udcdd N\u1ed9i dung g\u1ed1c: ' + text,
+            '',
+            'Bot kh\u00f4ng hi\u1ec3u g\u00f3i h\u00e0ng, vui l\u00f2ng ki\u1ec3m tra v\u00e0 t\u1ea1o \u0111\u01a1n th\u1ee7 c\u00f4ng \u1ea1.',
+        ].join('\n');
+        try {
+            await sendTelegramInline(OWNER_ID, dmText, { inline_keyboard: [[{ text: '\u274c \u0110\u00e3 xem', callback_data: 'noop' }]] });
+        } catch (e) { console.error(e); }
         return;
     }
 
@@ -508,6 +558,40 @@ async function handleGroupMessage(message: any) {
             for (const partial of partials) {
                 await createAndNotify(supabase, message, partial.email, parsed!, partial.group_message_id);
             }
+        }
+        return;
+    }
+
+    // =========================================================
+    // TRUONG HOP 3b: K hieu goi nhung co hint + co email partial → bao owner
+    // =========================================================
+    if (!hasEmail && !hasPackage && hasPackageHint(text)) {
+        const { data: partials } = await supabase
+            .from('pending_orders').select('*')
+            .eq('sender_user_id', senderId)
+            .eq('group_chat_id', groupChatId)
+            .eq('status', 'email_only')
+            .gte('created_at', oneMinuteAgo)
+            .limit(10);
+
+        if (partials && partials.length > 0) {
+            const agentName = partials[0].agent_telegram_name || '';
+            const emails = partials.map((p: any) => p.email).join(', ');
+            const partialIds = partials.map((p: any) => p.id);
+            await supabase.from('pending_orders').update({ status: 'merged_done' }).in('id', partialIds);
+
+            const dmText = [
+                '\u26a0\ufe0f \u0110\u01a1n c\u1ea7n ki\u1ec3m tra th\u1ee7 c\u00f4ng',
+                '',
+                '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agentName,
+                '\ud83d\udce7 Email(s): ' + emails,
+                '\ud83d\udcdd G\u00f3i \u0111\u1ea1i l\u00fd nh\u1eafn: ' + text,
+                '',
+                'Bot kh\u00f4ng hi\u1ec3u g\u00f3i h\u00e0ng, vui l\u00f2ng ki\u1ec3m tra v\u00e0 t\u1ea1o \u0111\u01a1n th\u1ee7 c\u00f4ng \u1ea1.',
+            ].join('\n');
+            try {
+                await sendTelegramInline(OWNER_ID, dmText, { inline_keyboard: [[{ text: '\u274c \u0110\u00e3 xem', callback_data: 'noop' }]] });
+            } catch (e) { console.error(e); }
         }
         return;
     }
