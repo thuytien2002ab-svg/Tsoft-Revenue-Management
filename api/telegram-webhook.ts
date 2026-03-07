@@ -387,12 +387,13 @@ async function processExpiredWaitingOrders(supabase: any, groupChatId: number) {
         // Kiem tra linked agent
         let linkedAgent: any = null;
         if (pending.sender_user_id) {
-            const { data: agentByTg } = await supabase
-                .from('users').select('*')
+            // Tim dai ly qua bang mapping (1 dai ly co the co nhieu nick Telegram)
+            const { data: mapping } = await supabase
+                .from('agent_telegram_mappings')
+                .select('agent_id, users(*)')
                 .eq('telegram_user_id', pending.sender_user_id)
-                .eq('role', 'AGENT')
                 .maybeSingle();
-            linkedAgent = agentByTg || null;
+            linkedAgent = mapping?.users || null;
         }
 
         let dmText = buildPendingMessage(pending);
@@ -817,8 +818,10 @@ async function handleCommand(message: any, text: string, chatId: number, chatTyp
             return res.status(200).json({ ok: true });
         }
 
-        // Cap nhat telegram_user_id cho dai ly
-        await supabase.from('users').update({ telegram_user_id: telegramUserId }).eq('id', agent.id);
+        // UPSERT vao bang mapping (neu nick nay da duoc gan roi thi cap nhat lai)
+        await supabase
+            .from('agent_telegram_mappings')
+            .upsert({ telegram_user_id: telegramUserId, agent_id: agent.id }, { onConflict: 'telegram_user_id' });
 
         await sendTelegram(chatId, [
             '✅ Đã gán thành công!',
