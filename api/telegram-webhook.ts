@@ -498,18 +498,29 @@ async function handleGroupMessage(message: any) {
     const norm = normalizeVN(text);
     if (hasEmail && !hasPackage && hasPackageHint(text)) {
         const agentName = (message.from?.first_name || '') + (message.from?.last_name ? ' ' + message.from.last_name : '');
-        const dmText = [
-            '\u26a0\ufe0f \u0110\u01a1n c\u1ea7n ki\u1ec3m tra th\u1ee7 c\u00f4ng',
-            '',
-            '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agentName,
-            '\ud83d\udce7 Email(s): ' + allEmails.join(', '),
-            '\ud83d\udcdd N\u1ed9i dung g\u1ed1c: ' + text,
-            '',
-            'Bot kh\u00f4ng hi\u1ec3u g\u00f3i h\u00e0ng, vui l\u00f2ng ki\u1ec3m tra v\u00e0 t\u1ea1o \u0111\u01a1n th\u1ee7 c\u00f4ng \u1ea1.',
-        ].join('\n');
-        try {
-            await sendTelegramInline(OWNER_ID, dmText, { inline_keyboard: [[{ text: '\u274c \u0110\u00e3 xem', callback_data: 'noop' }]] });
-        } catch (e) { console.error(e); }
+
+        // Reply trong group de dai ly biet da nhan
+        await sendTelegram(
+            groupChatId,
+            'Em nh\u1eadn \u0111\u01a1n c\u1ee7a ' + agentName + ' r\u1ed3i \u1ea1, \u0111ang chuy\u1ec3n s\u1ebfp Long ki\u1ec3m tra g\u00f3i h\u00e0ng, ch\u1edd x\u00edu nh\u00e9!',
+            { reply_to_message_id: message.message_id }
+        );
+
+        // Gui N DM rieng biet cho tung email (de owner xu ly tung don)
+        for (const email of allEmails) {
+            const dmText = [
+                '\u26a0\ufe0f \u0110\u01a1n c\u1ea7n ki\u1ec3m tra th\u1ee7 c\u00f4ng',
+                '',
+                '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agentName,
+                '\ud83d\udce7 Email: ' + email,
+                '\ud83d\udcdd G\u00f3i \u0111\u1ea1i l\u00fd nh\u1eafn: ' + text.replace(/[\w.-]+@[\w.-]+\.\w+/g, '').trim(),
+                '',
+                'Bot ch\u01b0a nh\u1eadn d\u1ea1ng \u0111\u01b0\u1ee3c g\u00f3i, vui l\u00f2ng t\u1ea1o \u0111\u01a1n th\u1ee7 c\u00f4ng \u1ea1.',
+            ].join('\n');
+            try {
+                await sendTelegramInline(OWNER_ID, dmText, { inline_keyboard: [[{ text: '\u274c \u0110\u00e3 xem', callback_data: 'noop' }]] });
+            } catch (e) { console.error(e); }
+        }
         return;
     }
 
