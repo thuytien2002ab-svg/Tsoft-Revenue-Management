@@ -367,27 +367,9 @@ async function processExpiredWaitingOrders(supabase: any, groupChatId: number) {
         // Doi sang pending truoc
         await supabase.from('pending_orders').update({ status: 'pending' }).eq('id', pending.id);
 
-        // Build group reply tu data da luu
-        const fakeFrom = { first_name: pending.agent_telegram_name, last_name: '' };
-        const genderInfo = getGenderTitle(fakeFrom);
-        const salutation = genderInfo.title
-            ? genderInfo.title + (genderInfo.lastName ? ' ' + genderInfo.lastName : '')
-            : genderInfo.lastName || 'Anh/Chị';
-
-        const groupReply = [
-            'Dạ đơn hàng của ' + salutation + ' đã được em gửi tới sếp Long duyệt. Xin vui lòng chờ trong ít phút ạ...',
-            '',
-            '📧 Email: ' + pending.email,
-            '📦 Gói: ' + pending.package_name + (pending.vip_name ? ' + ' + pending.vip_name : ''),
-            '💰 Giá: ' + fmt(pending.total_price) + ' VNĐ',
-        ].join('\n');
-
-        await sendTelegram(pending.group_chat_id, groupReply, { reply_to_message_id: pending.group_message_id });
-
-        // Kiem tra linked agent
+        // Kiem tra linked agent TRUOC (can cho salutation)
         let linkedAgent: any = null;
         if (pending.sender_user_id) {
-            // Tim dai ly qua bang mapping (1 dai ly co the co nhieu nick Telegram)
             const { data: mapping } = await supabase
                 .from('agent_telegram_mappings')
                 .select('agent_id, users(*)')
@@ -395,6 +377,29 @@ async function processExpiredWaitingOrders(supabase: any, groupChatId: number) {
                 .maybeSingle();
             linkedAgent = mapping?.users || null;
         }
+
+        // Build salutation: uu tien gender da luu trong DB
+        let salutation: string;
+        if (linkedAgent && linkedAgent.gender) {
+            const agentFirstName = (linkedAgent.name || '').split(' ').pop() || linkedAgent.name;
+            salutation = (linkedAgent.gender === 'female' ? 'Ch\u1ecb ' : 'Anh ') + agentFirstName;
+        } else {
+            const fakeFrom = { first_name: pending.agent_telegram_name, last_name: '' };
+            const gi = getGenderTitle(fakeFrom);
+            salutation = gi.title ? gi.title + (gi.lastName ? ' ' + gi.lastName : '') : 'Anh/Ch\u1ecb';
+        }
+
+
+
+        const groupReply = [
+            'D\u1ea1 \u0111\u01a1n h\u00e0ng c\u1ee7a ' + salutation + ' \u0111\u00e3 \u0111\u01b0\u1ee3c em g\u1eedi t\u1edbi s\u1ebfp Long duy\u1ec7t. Xin vui l\u00f2ng ch\u1edd trong \u00edt ph\u00fat \u1ea1...',
+            '',
+            '\ud83d\udce7 Email: ' + pending.email,
+            '\ud83d\udce6 G\u00f3i: ' + pending.package_name + (pending.vip_name ? ' + ' + pending.vip_name : ''),
+            '\ud83d\udcb0 Gi\u00e1: ' + fmt(pending.total_price) + ' VN\u0110',
+        ].join('\n');
+
+        await sendTelegram(pending.group_chat_id, groupReply, { reply_to_message_id: pending.group_message_id });
 
         let dmText = buildPendingMessage(pending);
         let keyboard: any;
@@ -830,6 +835,48 @@ async function handleCommand(message: any, text: string, chatId: number, chatTyp
             '🏢 Đại lý: ' + agent.name + ' (' + username + ')',
             '',
             'Từ giờ, đơn hàng từ tài khoản này sẽ tự gắn vào đại lý ' + agent.name + ' không cần chọn lại!',
+        ].join('\n'));
+        return res.status(200).json({ ok: true });
+    }
+
+    // === /gender username nam/nu - Khai bao gioi tinh dai ly (nhan tin rieng voi bot) ===
+    if (text.startsWith('/gender ') && chatType === 'private' && userId === OWNER_ID) {
+        const parts = text.replace('/gender ', '').trim().split(/\s+/);
+        if (parts.length < 2) {
+            await sendTelegram(chatId, [
+                '\u274c C\u00fa ph\u00e1p: /gender username nam|nu',
+                'V\u00ed d\u1ee5:',
+                '/gender thuytien nu',
+                '/gender longntk nam',
+            ].join('\n'));
+            return res.status(200).json({ ok: true });
+        }
+        const gUsername = parts[0].toLowerCase();
+        const gValue = parts[1].toLowerCase();
+        const genderMap: Record<string, string> = {
+            'nam': 'male', 'male': 'male', 'anh': 'male',
+            'nu': 'female', 'n\u1eef': 'female', 'female': 'female', 'chi': 'female', 'ch\u1ecb': 'female',
+        };
+        const genderStored = genderMap[gValue];
+        if (!genderStored) {
+            await sendTelegram(chatId, '\u274c Gi\u00e1 tr\u1ecb kh\u00f4ng h\u1ee3p l\u1ec7! D\u00f9ng: nam | nu');
+            return res.status(200).json({ ok: true });
+        }
+        const { data: agentG, error: agentGErr } = await supabase
+            .from('users').select('id, name').eq('username', gUsername).single();
+        if (agentGErr || !agentG) {
+            await sendTelegram(chatId, '\u274c Kh\u00f4ng t\u00ecm th\u1ea5y \u0111\u1ea1i l\u00fd "' + gUsername + '".');
+            return res.status(200).json({ ok: true });
+        }
+        await supabase.from('users').update({ gender: genderStored }).eq('id', agentG.id);
+        const gLabel = genderStored === 'female' ? '\u2640\ufe0f N\u1eef (Ch\u1ecb)' : '\u2642\ufe0f Nam (Anh)';
+        await sendTelegram(chatId, [
+            '\u2705 \u0110\u00e3 c\u1eadp nh\u1eadt gi\u1edbi t\u00ednh!',
+            '',
+            '\ud83c\udfe2 \u0110\u1ea1i l\u00fd: ' + agentG.name + ' (' + gUsername + ')',
+            '\ud83d\udc64 Gi\u1edbi t\u00ednh: ' + gLabel,
+            '',
+            'T\u1eeb gi\u1edd bot s\u1ebd g\u1ecdi l\u00e0 "' + (genderStored === 'female' ? 'Ch\u1ecb' : 'Anh') + ' ' + agentG.name.split(' ').pop() + '" khi nh\u1eadn \u0111\u01a1n!',
         ].join('\n'));
         return res.status(200).json({ ok: true });
     }
