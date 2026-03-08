@@ -269,11 +269,14 @@ function buildMainKeyboard(pendingId: number) {
     return {
         inline_keyboard: [
             [
-                { text: '\u270f\ufe0f Ch\u1ec9nh s\u1eeda', callback_data: 'edit:' + pendingId },
-                { text: '\u2705 Ch\u1ecdn \u0111\u1ea1i l\u00fd & X\u00e1c nh\u1eadn', callback_data: 'confirm:' + pendingId },
+                { text: '\u270f\ufe0f Ch\u1ec9nh s\u1eeda \u0111\u01a1n', callback_data: 'edit:' + pendingId },
+                { text: '\ud83d\udc64 Ch\u1ecdn \u0111\u1ea1i l\u00fd', callback_data: 'confirm:' + pendingId },
             ],
             [
-                { text: '\u274c Hu\u1ef7 \u0111\u01a1n', callback_data: 'cancel:' + pendingId },
+                { text: '\u2705 X\u00e1c nh\u1eadn', callback_data: 'confirm:' + pendingId },
+            ],
+            [
+                { text: '\u274c H\u1ee7y \u0111\u01a1n', callback_data: 'cancel:' + pendingId },
             ],
         ],
     };
@@ -447,6 +450,38 @@ async function createAndNotify(
     }
 }
 
+// =========================================================
+// PARSE TUNG DONG: moi dong co the co email(s) + goi rieng
+// =========================================================
+function parseLineByLine(text: string): Array<{ emails: string[]; parsed: ReturnType<typeof parseOrder>; rawPackageText: string }> {
+    const results: Array<{ emails: string[]; parsed: ReturnType<typeof parseOrder>; rawPackageText: string }> = [];
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    for (const line of lines) {
+        const emails: string[] = line.match(/[\w.-]+@[\w.-]+\.\w+/g) || [];
+        if (emails.length === 0) continue;
+        const parsed = parseOrder(line);
+        if (parsed && parsed.packageId > 0) {
+            results.push({ emails, parsed, rawPackageText: line.replace(/[\w.-]+@[\w.-]+\.\w+/g, '').trim() });
+        }
+    }
+    return results;
+}
+
+// Parse tung dong nhung goi khuyen cao (unrecognized)
+function parseLineByLineHints(text: string): Array<{ emails: string[]; rawPackageText: string }> {
+    const results: Array<{ emails: string[]; rawPackageText: string }> = [];
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    for (const line of lines) {
+        const emails: string[] = line.match(/[\w.-]+@[\w.-]+\.\w+/g) || [];
+        if (emails.length === 0) continue;
+        const parsed = parseOrder(line);
+        if ((!parsed || !parsed.packageId) && hasPackageHint(line)) {
+            results.push({ emails, rawPackageText: line.replace(/[\w.-]+@[\w.-]+\.\w+/g, '').trim() });
+        }
+    }
+    return results;
+}
+
 async function handleGroupMessage(message: any) {
     const text = message.text || '';
     const supabase = getSupabase();
@@ -474,17 +509,58 @@ async function handleGroupMessage(message: any) {
         return;
     }
 
-    // Tim TAT CA emails trong tin nhan (khong chi email dau tien)
+    // Tim TAT CA emails trong tin nhan
     const allEmails: string[] = text.match(/[\w.-]+@[\w.-]+\.\w+/g) || [];
     const hasEmail = allEmails.length > 0;
-    const parsed = parseOrder(text);
-    const hasPackage = !!(parsed && parsed.packageId);
-
     const oneMinuteAgo = new Date(Date.now() - 1 * 60 * 1000).toISOString();
 
     // =========================================================
-    // TRUONG HOP 1: Co ca email(s) + goi trong cung 1 tin
+    // UU TIEN: Parse tung dong (email + goi rieng moi dong)
     // =========================================================
+    const lineOrders = parseLineByLine(text);
+    const lineHints = parseLineByLineHints(text);
+
+    if (lineOrders.length > 0 || lineHints.length > 0) {
+        // Xu ly cac dong da hieu goi
+        for (const { emails, parsed } of lineOrders) {
+            for (const email of emails) {
+                await createAndNotify(supabase, message, email, parsed!);
+            }
+        }
+        // Xu ly cac dong chua hieu goi → bao owner ky
+        if (lineHints.length > 0) {
+            const agentName = (message.from?.first_name || '') + (message.from?.last_name ? ' ' + message.from.last_name : '');
+            if (lineOrders.length === 0) {
+                // Khong co dong nao ro rang → reply group
+                await sendTelegram(groupChatId,
+                    'Em nh\u1eadn \u0111\u01a1n c\u1ee7a ' + agentName + ' r\u1ed3i \u1ea1, \u0111ang chuy\u1ec3n s\u1ebfp Long ki\u1ec3m tra, ch\u1edd x\u00edu nh\u00e9!',
+                    { reply_to_message_id: message.message_id });
+            }
+            for (const { emails, rawPackageText } of lineHints) {
+                for (const email of emails) {
+                    const dmText = [
+                        '\u26a0\ufe0f \u0110\u01a1n c\u1ea7n ki\u1ec3m tra th\u1ee7 c\u00f4ng',
+                        '',
+                        '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agentName,
+                        '\ud83d\udce7 Email: ' + email,
+                        '\ud83d\udcdd G\u00f3i: ' + rawPackageText,
+                        '',
+                        'Bot ch\u01b0a nh\u1eadn d\u1ea1ng \u0111\u01b0\u1ee3c g\u00f3i, vui l\u00f2ng t\u1ea1o th\u1ee7 c\u00f4ng \u1ea1.',
+                    ].join('\n');
+                    try { await sendTelegramInline(OWNER_ID, dmText, { inline_keyboard: [[{ text: '\u274c \u0110\u00e3 xem', callback_data: 'noop' }]] }); } catch (e) { console.error(e); }
+                }
+            }
+        }
+        return;
+    }
+
+    // =========================================================
+    // FALLBACK: Khong co line co goi ro rang
+    // =========================================================
+    const parsed = parseOrder(text);
+    const hasPackage = !!(parsed && parsed.packageId);
+
+    // TRUONG HOP 1: Tat ca email + 1 goi chung tren cung 1 dong / message
     if (hasEmail && hasPackage) {
         for (const email of allEmails) {
             await createAndNotify(supabase, message, email, parsed!);
@@ -492,34 +568,23 @@ async function handleGroupMessage(message: any) {
         return;
     }
 
-    // =========================================================
-    // TRUONG HOP 1b: Co email + CO HINT GOI nhung bot k hieu → bao owner
-    // =========================================================
-    const norm = normalizeVN(text);
+    // TRUONG HOP 1b: Co email + hint goi nhung khong hieu
+    const agentNameFallback = (message.from?.first_name || '') + (message.from?.last_name ? ' ' + message.from.last_name : '');
     if (hasEmail && !hasPackage && hasPackageHint(text)) {
-        const agentName = (message.from?.first_name || '') + (message.from?.last_name ? ' ' + message.from.last_name : '');
-
-        // Reply trong group de dai ly biet da nhan
-        await sendTelegram(
-            groupChatId,
-            'Em nh\u1eadn \u0111\u01a1n c\u1ee7a ' + agentName + ' r\u1ed3i \u1ea1, \u0111ang chuy\u1ec3n s\u1ebfp Long ki\u1ec3m tra g\u00f3i h\u00e0ng, ch\u1edd x\u00edu nh\u00e9!',
-            { reply_to_message_id: message.message_id }
-        );
-
-        // Gui N DM rieng biet cho tung email (de owner xu ly tung don)
+        await sendTelegram(groupChatId,
+            'Em nh\u1eadn \u0111\u01a1n c\u1ee7a ' + agentNameFallback + ' r\u1ed3i \u1ea1, \u0111ang chuy\u1ec3n s\u1ebfp Long ki\u1ec3m tra g\u00f3i h\u00e0ng, ch\u1edd x\u00edu nh\u00e9!',
+            { reply_to_message_id: message.message_id });
         for (const email of allEmails) {
             const dmText = [
                 '\u26a0\ufe0f \u0110\u01a1n c\u1ea7n ki\u1ec3m tra th\u1ee7 c\u00f4ng',
                 '',
-                '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agentName,
+                '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agentNameFallback,
                 '\ud83d\udce7 Email: ' + email,
                 '\ud83d\udcdd G\u00f3i \u0111\u1ea1i l\u00fd nh\u1eafn: ' + text.replace(/[\w.-]+@[\w.-]+\.\w+/g, '').trim(),
                 '',
                 'Bot ch\u01b0a nh\u1eadn d\u1ea1ng \u0111\u01b0\u1ee3c g\u00f3i, vui l\u00f2ng t\u1ea1o \u0111\u01a1n th\u1ee7 c\u00f4ng \u1ea1.',
             ].join('\n');
-            try {
-                await sendTelegramInline(OWNER_ID, dmText, { inline_keyboard: [[{ text: '\u274c \u0110\u00e3 xem', callback_data: 'noop' }]] });
-            } catch (e) { console.error(e); }
+            try { await sendTelegramInline(OWNER_ID, dmText, { inline_keyboard: [[{ text: '\u274c \u0110\u00e3 xem', callback_data: 'noop' }]] }); } catch (e) { console.error(e); }
         }
         return;
     }
@@ -735,7 +800,8 @@ async function handleCallback(callbackQuery: any) {
         const keyboard = {
             inline_keyboard: [
                 [{ text: '\ud83d\udce7 S\u1eeda Email', callback_data: 'edit_email:' + pendingId }],
-                [{ text: '\ud83d\udce6 S\u1eeda G\u00f3i', callback_data: 'edit_pkg:' + pendingId }],
+                [{ text: '\ud83d\udce6 S\u1eeda G\u00f3i ch\u00ednh', callback_data: 'edit_pkg:' + pendingId }],
+                [{ text: '\u2b50 S\u1eeda VIP', callback_data: 'edit_vip:' + pendingId }],
                 [{ text: '\u2b05\ufe0f Quay l\u1ea1i', callback_data: 'back:' + pendingId }],
             ],
         };
@@ -755,56 +821,105 @@ async function handleCallback(callbackQuery: any) {
         await editMessageText(chatId, messageId, text);
     }
 
-    // ---- EDIT PKG: show package selection ----
+    // ---- EDIT PKG: show package selection (step 1) ----
     else if (data.startsWith('edit_pkg:')) {
         const pendingId = parseInt(data.split(':')[1]);
         const { data: pkgs } = await supabase.from('packages').select('*').order('id');
-
         const buttons = (pkgs || []).map((pkg: any) => ([
             { text: pkg.name + ' - ' + fmt(pkg.price) + '\u0111', callback_data: 'pkg:' + pendingId + ':' + pkg.id }
         ]));
         buttons.push([{ text: '\u2b05\ufe0f Quay l\u1ea1i', callback_data: 'edit:' + pendingId }]);
-
         const { data: pending } = await supabase.from('pending_orders').select('*').eq('id', pendingId).single();
         if (!pending) return;
-        const text = buildPendingMessage(pending, '\u270f\ufe0f Ch\u1ec9nh s\u1eeda \u0111\u01a1n h\u00e0ng') + '\n\n\ud83d\udce6 Ch\u1ecdn g\u00f3i m\u1edbi:';
+        const text = buildPendingMessage(pending, '\u270f\ufe0f Ch\u1ec9nh s\u1eeda \u0111\u01a1n h\u00e0ng') + '\n\n\ud83d\udce6 Ch\u1ecdn g\u00f3i ch\u00ednh:';
         await editMessageText(chatId, messageId, text, { inline_keyboard: buttons });
     }
 
-    // ---- PKG: select new package ----
+    // ---- EDIT VIP: show VIP selection only ----
+    else if (data.startsWith('edit_vip:')) {
+        const pendingId = parseInt(data.split(':')[1]);
+        const { data: pending } = await supabase.from('pending_orders').select('*').eq('id', pendingId).single();
+        if (!pending) return;
+        const vipOptions = [
+            { label: 'Kh\u00f4ng VIP', price: 0, name: '' },
+            { label: 'VIP 1 th\u00e1ng - 50.000\u0111', price: 50000, name: 'VIP 1 th\u00e1ng' },
+            { label: 'VIP 3 th\u00e1ng - 150.000\u0111', price: 150000, name: 'VIP 3 th\u00e1ng' },
+            { label: 'VIP 6 th\u00e1ng - 300.000\u0111', price: 300000, name: 'VIP 6 th\u00e1ng' },
+        ];
+        const vipButtons = vipOptions.map(v => ([{
+            text: (pending.vip_name === v.name ? '\u2705 ' : '') + v.label,
+            callback_data: 'vip:' + pendingId + ':' + v.price + ':' + encodeURIComponent(v.name),
+        }]));
+        vipButtons.push([{ text: '\u2b05\ufe0f Quay l\u1ea1i', callback_data: 'edit:' + pendingId }]);
+        const text = buildPendingMessage(pending, '\u270f\ufe0f Ch\u1ec9nh s\u1eeda \u0111\u01a1n h\u00e0ng') + '\n\n\u2b50 Ch\u1ecdn g\u00f3i VIP:';
+        await editMessageText(chatId, messageId, text, { inline_keyboard: vipButtons });
+    }
+
+    // ---- PKG: package selected → show VIP options (step 2) ----
     else if (data.startsWith('pkg:')) {
         const parts = data.split(':');
         const pendingId = parseInt(parts[1]);
         const pkgId = parseInt(parts[2]);
-
-        // Lay package info tu DB
         const { data: pkg } = await supabase.from('packages').select('*').eq('id', pkgId).single();
         if (!pkg) return;
 
-        // Lay pending de giu VIP
-        const { data: currentPending } = await supabase.from('pending_orders').select('vip_price, vip_name').eq('id', pendingId).single();
-        const vipPrice = currentPending?.vip_price || 0;
-        const newTotal = pkg.price + vipPrice;
-
-        // Cap nhat pending order
+        // Luu tam goi chinh vao pending (chua tinh VIP)
         await supabase.from('pending_orders').update({
             package_id: pkgId,
             package_name: pkg.name,
-            total_price: newTotal,
-            notes: currentPending?.vip_name
-                ? ('G\u00f3i ch\u00ednh: ' + pkg.name + ' + ' + currentPending.vip_name.toUpperCase())
-                : ('G\u00f3i ch\u00ednh: ' + pkg.name),
+            total_price: pkg.price,
+            vip_price: 0,
+            vip_name: '',
+            notes: 'G\u00f3i ch\u00ednh: ' + pkg.name,
         }).eq('id', pendingId);
 
-        // Lay updated pending
+        // Hien thi buoc 2: chon VIP
+        const vipOptions = [
+            { label: 'Kh\u00f4ng VIP', price: 0, name: '' },
+            { label: 'VIP 1 th\u00e1ng - 50.000\u0111', price: 50000, name: 'VIP 1 th\u00e1ng' },
+            { label: 'VIP 3 th\u00e1ng - 150.000\u0111', price: 150000, name: 'VIP 3 th\u00e1ng' },
+            { label: 'VIP 6 th\u00e1ng - 300.000\u0111', price: 300000, name: 'VIP 6 th\u00e1ng' },
+        ];
+        const vipButtons = vipOptions.map(v => ([{
+            text: v.label,
+            callback_data: 'vip:' + pendingId + ':' + v.price + ':' + encodeURIComponent(v.name),
+        }]));
+        vipButtons.push([{ text: '\u2b05\ufe0f Quay l\u1ea1i (s\u1eeda g\u00f3i ch\u00ednh)', callback_data: 'edit_pkg:' + pendingId }]);
+
+        const { data: updated } = await supabase.from('pending_orders').select('*').eq('id', pendingId).single();
+        if (!updated) return;
+        const text = buildPendingMessage(updated, '\u2705 G\u00f3i ch\u00ednh: ' + pkg.name) + '\n\n\u2b50 B\u01b0\u1edbc 2: Ch\u1ecdn g\u00f3i VIP:';
+        await editMessageText(chatId, messageId, text, { inline_keyboard: vipButtons });
+    }
+
+    // ---- VIP: VIP selected → save both and return to main ----
+    else if (data.startsWith('vip:')) {
+        const parts = data.split(':');
+        const pendingId = parseInt(parts[1]);
+        const vipPrice = parseInt(parts[2]) || 0;
+        const vipName = decodeURIComponent(parts[3] || '');
+
         const { data: pending } = await supabase.from('pending_orders').select('*').eq('id', pendingId).single();
         if (!pending) return;
 
-        const text = buildPendingMessage(pending, '\u270f\ufe0f \u0110\u00e3 c\u1eadp nh\u1eadt g\u00f3i!');
+        const newTotal = (pending.total_price - (pending.vip_price || 0)) + vipPrice;
+        const newNotes = vipName
+            ? 'G\u00f3i ch\u00ednh: ' + pending.package_name + ' + ' + vipName
+            : 'G\u00f3i ch\u00ednh: ' + pending.package_name;
+
+        await supabase.from('pending_orders').update({
+            vip_price: vipPrice,
+            vip_name: vipName,
+            total_price: newTotal,
+            notes: newNotes,
+        }).eq('id', pendingId);
+
+        const { data: updated } = await supabase.from('pending_orders').select('*').eq('id', pendingId).single();
+        if (!updated) return;
+
+        const text = buildPendingMessage(updated, '\u270f\ufe0f \u0110\u00e3 c\u1eadp nh\u1eadt g\u00f3i!');
         await editMessageText(chatId, messageId, text, buildMainKeyboard(pendingId));
     }
-
-    // ---- BACK: return to main menu ----
     else if (data.startsWith('back:')) {
         const pendingId = parseInt(data.split(':')[1]);
         const { data: pending } = await supabase.from('pending_orders').select('*').eq('id', pendingId).single();
@@ -954,64 +1069,86 @@ async function handleCommand(message: any, text: string, chatId: number, chatTyp
         return res.status(200).json({ ok: true });
     }
 
-    // === /themdon (admin them don nhanh) ===
+    // === /themdon username (multi-line batch) ===
     if (text.startsWith('/themdon ') && isAdmin) {
         const content = text.replace('/themdon ', '').trim();
-        const words = content.split(/\s+/);
-        const username = words[words.length - 1].toLowerCase();
-        const orderText = words.slice(0, words.length - 1).join(' ');
+        const lines = content.split(/\r?\n/);
+        // Word dau tien cua dong 1 = username dai ly
+        const firstLine = lines[0].trim();
+        const username = firstLine.split(/\s+/)[0].toLowerCase();
+        // Phan con lai (tu ky tu sau username tren dong 1 + cac dong tiep theo)
+        const orderBody = [firstLine.slice(username.length).trim(), ...lines.slice(1)].join('\n').trim();
 
-        const order = parseOrder(orderText);
-        if (!order || !order.packageId) {
-            await sendTelegram(chatId, '\u274c Kh\u00f4ng \u0111\u1ecdc \u0111\u01b0\u1ee3c \u0111\u01a1n. C\u00fa ph\u00e1p:\n/themdon email@gmail.com 6 th\u00e1ng + vip 1 th\u00e1ng thuytien');
-            return res.status(200).json({ ok: true });
-        }
-
+        // Tim dai ly
         const { data: agent, error: agentErr } = await supabase
             .from('users').select('*').eq('username', username).single();
-
         if (agentErr || !agent) {
-            await sendTelegram(chatId, '\u274c Kh\u00f4ng t\u00ecm th\u1ea5y \u0111\u1ea1i l\u00fd "' + username + '".');
-            return res.status(200).json({ ok: true });
-        }
-
-        // Check trung
-        const isDuplicate = await checkDuplicateOrder(supabase, order.email, order.packageId);
-        if (isDuplicate) {
-            await sendTelegram(chatId, '\u26a0\ufe0f Email ' + order.email + ' v\u1edbi g\u00f3i "' + order.packageName + '" \u0111\u00e3 c\u00f3 \u0111\u01a1n h\u00f4m nay r\u1ed3i! Kh\u00f4ng th\u1ec3 th\u00eam tr\u00f9ng.');
+            await sendTelegram(chatId, '\u274c Kh\u00f4ng t\u00ecm th\u1ea5y \u0111\u1ea1i l\u00fd "' + username + '".\nC\u00fa ph\u00e1p:\n/themdon thuytien\ndhuutai05@gmail.com 6 th\u00e1ng\nb@gmail.com 3 th\u00e1ng');
             return res.status(200).json({ ok: true });
         }
 
         const discount = agent.discountPercentage || 0;
-        const actualRevenue = Math.round(order.totalPrice * (1 - discount / 100));
 
-        const { error: insertErr } = await supabase.from('orders').insert({
-            account_name: order.email.split('@')[0],
-            account_email: order.email,
-            packageId: order.packageId,
-            price: order.totalPrice,
-            actual_revenue: actualRevenue,
-            status: 'CH\u01af\u0041 K\u00cdCH HO\u1ea0T',
-            paymentStatus: 'CH\u01af\u0041 THANH TO\u00c1N',
-            agentId: agent.id,
-            sold_at: new Date().toISOString(),
-            notes: order.notes,
-        });
-
-        if (insertErr) {
-            await sendTelegram(chatId, '\u274c L\u1ed7i: ' + insertErr.message);
-            return res.status(200).json({ ok: true });
+        // Parse tung dong
+        const lineOrders = parseLineByLine(orderBody);
+        if (lineOrders.length === 0) {
+            // Thu single-order fallback (email + goi tren 1 dong)
+            const singleOrder = parseOrder(orderBody);
+            if (!singleOrder || !singleOrder.packageId || !singleOrder.email) {
+                await sendTelegram(chatId, '\u274c Kh\u00f4ng \u0111\u1ecdc \u0111\u01b0\u1ee3c \u0111\u01a1n n\u00e0o. H\u00e3y ki\u1ec3m tra c\u00fa ph\u00e1p.\nV\u00ed d\u1ee5:\n/themdon thuytien\na@gmail.com 6 th\u00e1ng\nb@gmail.com 3 th\u00e1ng + vip 1 th\u00e1ng');
+                return res.status(200).json({ ok: true });
+            }
+            lineOrders.push({ emails: [singleOrder.email], parsed: singleOrder, rawPackageText: '' });
         }
 
-        await sendTelegram(chatId, [
-            '\u2705 \u0110\u00e3 t\u1ea1o \u0111\u01a1n th\u00e0nh c\u00f4ng!',
+        const results: string[] = [];
+        let successCount = 0;
+        let skipCount = 0;
+
+        for (const { emails, parsed } of lineOrders) {
+            for (const email of emails) {
+                if (!parsed || !parsed.packageId) {
+                    results.push('\u26a0\ufe0f ' + email + ' \u2014 kh\u00f4ng nh\u1eadn di\u1ec7n \u0111\u01b0\u1ee3c g\u00f3i');
+                    skipCount++;
+                    continue;
+                }
+                const isDup = await checkDuplicateOrder(supabase, email, parsed.packageId);
+                if (isDup) {
+                    results.push('\u23ed ' + email + ' \u2014 tr\u00f9ng \u0111\u01a1n h\u00f4m nay');
+                    skipCount++;
+                    continue;
+                }
+                const actualRevenue = Math.round(parsed.totalPrice * (1 - discount / 100));
+                const { error: insertErr } = await supabase.from('orders').insert({
+                    account_name: email.split('@')[0],
+                    account_email: email,
+                    packageId: parsed.packageId,
+                    price: parsed.totalPrice,
+                    actual_revenue: actualRevenue,
+                    status: 'CH\u01af\u0041 K\u00cdCH HO\u1ea0T',
+                    paymentStatus: 'CH\u01af\u0041 THANH TO\u00c1N',
+                    agentId: agent.id,
+                    sold_at: new Date().toISOString(),
+                    notes: parsed.notes,
+                });
+                if (insertErr) {
+                    results.push('\u274c ' + email + ' \u2014 l\u1ed7i: ' + insertErr.message);
+                    skipCount++;
+                } else {
+                    results.push('\u2705 ' + email + ' \u2014 ' + parsed.packageName + (parsed.vipName ? ' + ' + parsed.vipName : '') + ' = ' + fmt(parsed.totalPrice) + '\u0111');
+                    successCount++;
+                }
+            }
+        }
+
+        const summary = [
+            '\ud83d\udce6 K\u1ebft qu\u1ea3 th\u00eam \u0111\u01a1n cho ' + agent.name + ' (CK ' + discount + '%):',
             '',
-            '\ud83d\udce7 Email: ' + order.email,
-            '\ud83d\udce6 ' + order.notes,
-            '\ud83d\udcb0 Gi\u00e1: ' + fmt(order.totalPrice) + ' VN\u0110',
-            '\ud83d\udcc8 Doanh thu th\u1ef1c: ' + fmt(actualRevenue) + ' VN\u0110',
-            '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agent.name + ' (' + username + ')',
-        ].join('\n'));
+            ...results,
+            '',
+            '\u2705 Th\u00e0nh c\u00f4ng: ' + successCount + ' \u0111\u01a1n | \u23ed B\u1ecf qua: ' + skipCount + ' \u0111\u01a1n',
+        ].join('\n');
+        await sendTelegram(chatId, summary);
         return res.status(200).json({ ok: true });
     }
 
