@@ -714,7 +714,7 @@ async function handleCallback(callbackQuery: any) {
             '\u2705 \u0110\u01a1n h\u00e0ng \u0111\u00e3 x\u00e1c nh\u1eadn!',
             '',
             '\ud83d\udce7 ' + pending.email,
-            '\ud83d\udce6 ' + pending.package_name + (pending.vip_name ? ' + ' + pending.vip_name.toUpperCase() : '') + ' - ' + fmt(pending.total_price) + ' VN\u0110',
+            '\ud83d\udce6 ' + pending.package_name + (pending.vip_name ? ' + ' + pending.vip_name.toUpperCase() : '') + ' = ' + fmt(pending.total_price) + ' VN\u0110',
             '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agent.name,
             '\ud83d\udcb0 Th\u1ef1c thu: ' + fmt(actualRevenue) + ' VN\u0110',
         ].join('\n'));
@@ -724,7 +724,7 @@ async function handleCallback(callbackQuery: any) {
             '\u2705 \u0110\u01a1n h\u00e0ng \u0111\u00e3 \u0111\u01b0\u1ee3c x\u00e1c nh\u1eadn!',
             '',
             '\ud83d\udce7 Email: ' + pending.email,
-            '\ud83d\udce6 G\u00f3i: ' + pending.package_name + (pending.vip_name ? ' + ' + pending.vip_name.toUpperCase() : '') + ' - ' + fmt(pending.total_price) + ' VN\u0110',
+            '\ud83d\udce6 G\u00f3i: ' + pending.package_name + (pending.vip_name ? ' + ' + pending.vip_name.toUpperCase() : '') + ' = ' + fmt(pending.total_price) + ' VN\u0110',
             '\ud83d\udc64 \u0110\u1ea1i l\u00fd: ' + agent.name,
         ].join('\n'), { reply_to_message_id: pending.group_message_id });
     }
